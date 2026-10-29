@@ -15,7 +15,7 @@ curl -fsSL https://bun.sh/install | bash
 然后：
 
 ```bash
-git clone <这个仓库的地址> cc-context-insights
+git clone https://github.com/xpangjia/cc-context-insights.git
 cd cc-context-insights
 ./start.sh          # 或者 bun start
 ```
