@@ -14,6 +14,8 @@ const tab = computed(() => (route.query.tab as string) || "context");
 const setTab = (k: string) => router.replace({ query: { ...route.query, tab: k } });
 const agents = ref<{ id: string; title: string }[]>([{ id: "main", title: "主控" }]);
 const ctxKey = ref(0), ctxAgent = ref("main");
+/** bare=1:宿主页面自己有会话信息,这里只留页签和内容 */
+const bare = computed(() => route.query.bare === "1");
 
 async function load() {
   err.value = "";
@@ -33,7 +35,7 @@ onMounted(load);
 <template>
   <div v-if="err" class="card empty">{{ err }}，<RouterLink to="/" class="lk">回到总览</RouterLink></div>
   <template v-else-if="s">
-    <div class="card head">
+    <div v-if="!bare" class="card head">
       <div class="crumbs"><RouterLink to="/">上下文洞察</RouterLink><span>/</span><span>{{ s.where }}</span><span v-if="s.auto" class="tag">脚本自动</span></div>
       <h1>{{ (s.title ?? "（没有输入）").replace(/\s+/g, " ").slice(0, 200) }}</h1>
       <div class="kv">

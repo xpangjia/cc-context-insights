@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { get } from "./lib/api";
+import { embedded } from "./lib/embed";
 const st = ref<any>(null);
 let t: number;
 async function poll() { try { st.value = await get("/api/status"); } catch {} }
@@ -10,7 +11,7 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString("zh-CN", { hour: 
 </script>
 
 <template>
-  <header class="top">
+  <header v-if="!embedded" class="top">
     <RouterLink to="/" class="brand"><span class="logo">C</span><b>Claude Code 上下文洞察</b></RouterLink>
     <span class="idx" v-if="st">
       <template v-if="!st.logsFound"><span class="st failed">没找到会话日志</span>{{ st.logs }}</template>
@@ -19,8 +20,8 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString("zh-CN", { hour: 
       <template v-else><span class="st failed">索引出错</span>{{ st.index.error }}</template>
     </span>
   </header>
-  <main><RouterView /></main>
-  <footer class="foot">只读本机 {{ st?.logs ?? "~/.claude/projects" }} 下的会话日志，数据不出这台电脑。费用按 Anthropic 官方价估算，和你实际付的可能不同。</footer>
+  <main :class="{ embedded }"><RouterView /></main>
+  <footer v-if="!embedded" class="foot">只读本机 {{ st?.logs ?? "~/.claude/projects" }} 下的会话日志，数据不出这台电脑。费用按 Anthropic 官方价估算，和你实际付的可能不同。</footer>
 </template>
 
 <style scoped>
@@ -29,6 +30,7 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString("zh-CN", { hour: 
 .logo { width: 28px; height: 28px; border-radius: 8px; background: var(--acc); color: var(--on-acc); display: grid; place-items: center; font: 700 15px var(--num); }
 .idx { margin-left: auto; display: flex; gap: 8px; align-items: center; color: var(--ink3); font-size: 12.5px; }
 main { padding: 24px 32px 40px; max-width: 1440px; margin: 0 auto; }
+main.embedded { padding: 4px 2px 24px; max-width: none; }
 .foot { text-align: center; color: var(--ink3); font-size: 12px; padding: 0 20px 30px; }
-@media (max-width: 900px) { .top { padding: 12px 14px; } main { padding: 16px 12px 30px; } }
+@media (max-width: 900px) { .top { padding: 12px 14px; } main:not(.embedded) { padding: 16px 12px 30px; } }
 </style>

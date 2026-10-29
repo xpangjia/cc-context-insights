@@ -58,6 +58,19 @@ cd cc-context-insights
 | `CC_INSIGHTS_DATA` | `~/.cc-context-insights` | 本工具的索引库，删掉会自动重建 |
 | `NO_OPEN` | 不设 | 设成 1 就不自动开浏览器 |
 
+## 嵌进你自己的页面
+
+可以用 iframe 把它嵌进你自己的看板：
+
+```html
+<iframe src="http://127.0.0.1:18450/" style="width:100%;height:80vh;border:0"></iframe>
+<iframe src="http://127.0.0.1:18450/session?id=<会话 id>&tab=context&bare=1" style="width:100%;height:80vh;border:0"></iframe>
+```
+
+- 被嵌入时自动隐藏自己的页头和页脚。
+- 会话页的 `tab` 可以是 `context`（上下文）、`trace`（轨迹）、`fleet`（编队）。
+- 加 `bare=1` 会再隐藏会话信息卡，适合宿主页面已经显示了会话标题的情况。
+
 ## 隐私
 
 - 只读 `~/.claude/projects` 下的日志，不改、不上传，网页只监听 127.0.0.1（别的电脑访问不到）。
