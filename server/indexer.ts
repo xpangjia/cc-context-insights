@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS cc_sessions (
   auto INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS cc_skills (session_id TEXT, at TEXT, skill TEXT, via TEXT);
+CREATE TABLE IF NOT EXISTS cc_prompts (session_id TEXT, at TEXT, text TEXT);
+CREATE INDEX IF NOT EXISTS cc_prompts_s ON cc_prompts (session_id);
 CREATE INDEX IF NOT EXISTS cc_skills_at ON cc_skills (at);
 CREATE TABLE IF NOT EXISTS cc_requests (
   id TEXT PRIMARY KEY, session_id TEXT, agent TEXT, at TEXT, day TEXT, source TEXT, model TEXT,
@@ -35,7 +37,7 @@ CREATE TABLE IF NOT EXISTS cc_meta (key TEXT PRIMARY KEY, value TEXT);
 `;
 
 /** 索引格式版本:改了解析口径就加一,启动时发现旧版本会清空重建 */
-export const CC_VERSION = "6";
+export const CC_VERSION = "8";
 
 const SKIP_PREFIX = ['{"type":"mode"', '{"type":"permission-mode"', '{"type":"atis-latch"', '{"type":"file-history', '{"type":"queue-operation"'];
 
@@ -66,7 +68,7 @@ export function promptText(content: unknown): { text: string; command?: string }
     return { text: `/${cmd[1].trim()}${args ? " " + args : ""}`, command: cmd[1].trim() };
   }
   if (/^<(local-command|system-reminder|task-notification|bash-|user-memory)/.test(s)) return null;
-  if (s.startsWith("Caveat:") || s.startsWith("[Request interrupted")) return null;
+  if (s.startsWith("Caveat:") || s.startsWith("[Request interrupted") || s.startsWith("Another Claude session sent a message")) return null;
   return { text: s.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim() };
 }
 
@@ -85,7 +87,7 @@ type Acc = {
   state: State; agent: string | null; reqs: ReqRow[]; upd: Map<string, ReqUpd>;
   sid: string; dir: string; cwd?: string; entry?: string; first?: string; last?: string; title?: string; lastPrompt?: string; branch?: string;
   prompts: number; replies: number; out: number; inp: number; cr: number; cw: number; model?: string; sub: boolean;
-  skills: [string, string, string][];
+  skills: [string, string, string][]; said: [string, string][];
 };
 
 const updOf = (a: Acc, ref: string) => {
@@ -152,6 +154,7 @@ function parseLines(text: string, acc: Acc) {
       if (!p) continue;
       acc.prompts++;
       if (!acc.title && !p.command) acc.title = p.text.slice(0, 120);
+      acc.said.push([ts, p.text.slice(0, 600)]);
       if (p.command) acc.skills.push([ts, p.command, "命令"]);
     } else if (t === "assistant" && d.message?.role === "assistant") {
       const m = d.message;
@@ -230,7 +233,7 @@ export function indexAll(db: Database, root: string, log = (_: string) => {}) {
   try { db.exec("ALTER TABLE cc_sessions ADD COLUMN auto INTEGER DEFAULT 0"); } catch {}
   const ver = (db.query("SELECT value FROM cc_meta WHERE key = 'version'").get() as { value: string } | null)?.value;
   if (ver !== CC_VERSION) {
-    for (const t of ["cc_files", "cc_sessions", "cc_skills", "cc_requests"]) db.exec(`DELETE FROM ${t}`);
+    for (const t of ["cc_files", "cc_sessions", "cc_skills", "cc_prompts", "cc_requests"]) db.exec(`DELETE FROM ${t}`);
     db.query("INSERT OR REPLACE INTO cc_meta (key, value) VALUES ('version', ?)").run(CC_VERSION);
     log(`会话索引格式升级到 ${CC_VERSION}，全部重建`);
   }
@@ -246,7 +249,7 @@ export function indexAll(db: Database, root: string, log = (_: string) => {}) {
     if (offset > 0 && prev?.state) { try { state = { ...newState(), ...JSON.parse(prev.state) }; } catch {} }
     const acc: Acc = { state, agent: f.sub ? basename(f.path, ".jsonl") : null, reqs: [], upd: new Map(),
       sid: f.sid, dir: f.dir, prompts: 0, replies: 0, out: 0, inp: 0, cr: 0, cw: 0, sub: f.sub,
-      skills: [] };
+      skills: [], said: [] };
     const end = readNew(f.path, offset, st.size, s => parseLines(s, acc));
     bytes += end - offset;
     save(db, acc, f.path, st.size, st.mtimeMs, end);
@@ -257,7 +260,7 @@ export function indexAll(db: Database, root: string, log = (_: string) => {}) {
 }
 
 function purgeSession(db: Database, sid: string) {
-  for (const t of ["cc_skills", "cc_requests"]) db.query(`DELETE FROM ${t} WHERE session_id = ?`).run(sid);
+  for (const t of ["cc_skills", "cc_prompts", "cc_requests"]) db.query(`DELETE FROM ${t} WHERE session_id = ?`).run(sid);
   db.query("DELETE FROM cc_sessions WHERE id = ?").run(sid);
   db.query("DELETE FROM cc_files WHERE session_id = ?").run(sid);
 }
@@ -286,6 +289,8 @@ function save(db: Database, a: Acc, path: string, size: number, mtime: number, o
     });
     const sq = db.query("INSERT INTO cc_skills (session_id, at, skill, via) VALUES (?, ?, ?, ?)");
     for (const [at, s, via] of a.skills) sq.run(a.sid, localTs(at), s, via);
+    const pq = db.query("INSERT INTO cc_prompts (session_id, at, text) VALUES (?, ?, ?)");
+    for (const [at, t] of a.said) pq.run(a.sid, localTs(at), t);
     const rq = db.query(`INSERT OR IGNORE INTO cc_requests (id, session_id, agent, at, day, source, model, e_system, e_tools, e_user, e_inject, e_skill, e_assistant, e_tool, msgs)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const r of a.reqs) rq.run(r.id, a.sid, a.agent, localTs(r.at), localDay(r.at), r.source, r.model, ...r.e.map(x => Math.round(x)), r.msgs);

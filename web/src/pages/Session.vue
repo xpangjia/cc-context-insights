@@ -6,6 +6,8 @@ import SessionTrace from "./SessionTrace.vue";
 import SessionFleet from "./SessionFleet.vue";
 import { get } from "../lib/api";
 import { tk } from "../lib/ctx";
+import { embedded } from "../lib/embed";
+import SessionSearch from "../components/SessionSearch.vue";
 
 const route = useRoute(), router = useRouter();
 const s = ref<any>(null), err = ref(""), copied = ref(false);
@@ -36,7 +38,7 @@ onMounted(load);
   <div v-if="err" class="card empty">{{ err }}，<RouterLink to="/" class="lk">回到总览</RouterLink></div>
   <template v-else-if="s">
     <div v-if="!bare" class="card head">
-      <div class="crumbs"><RouterLink to="/">上下文洞察</RouterLink><span>/</span><span>{{ s.where }}</span><span v-if="s.auto" class="tag">脚本自动</span></div>
+      <div class="crumbs"><RouterLink to="/">上下文洞察</RouterLink><span>/</span><span>{{ s.where }}</span><span v-if="s.auto" class="tag">脚本自动</span><SessionSearch v-if="embedded" class="crs" /></div>
       <h1>{{ (s.title ?? "（没有输入）").replace(/\s+/g, " ").slice(0, 200) }}</h1>
       <div class="kv">
         <span>时间<b>{{ s.first_at?.slice(5, 16) }} → {{ s.last_at?.slice(5, 16) }}（{{ span(s.first_at, s.last_at) }}）</b></span>
@@ -60,6 +62,7 @@ onMounted(load);
 <style scoped>
 .head { margin-bottom: 14px; }
 .crumbs { display: flex; gap: 6px; font-size: 12px; color: var(--ink3); align-items: center; }
+.crumbs .crs { margin-left: auto; }
 .crumbs a:hover { color: var(--acc); }
 h1 { font: 600 20px/1.45 var(--font-head); margin: 6px 0 12px; word-break: break-word; }
 .kv { display: flex; flex-wrap: wrap; gap: 6px 24px; font-size: 13px; color: var(--ink2); }

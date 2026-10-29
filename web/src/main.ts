@@ -1,6 +1,7 @@
 import { createApp } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
 import App from "./App.vue";
+import { startEmbedBridge } from "./lib/embed";
 import "./styles/tokens.css";
 
 const router = createRouter({
@@ -13,3 +14,4 @@ const router = createRouter({
   scrollBehavior: (_to, _from, saved) => saved ?? { top: 0 },
 });
 createApp(App).use(router).mount("#app");
+startEmbedBridge(router);

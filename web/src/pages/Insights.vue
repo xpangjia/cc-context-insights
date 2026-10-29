@@ -5,6 +5,8 @@ import Donut from "../components/Donut.vue";
 import BarChart from "../components/BarChart.vue";
 import Heatmap from "../components/Heatmap.vue";
 import { get } from "../lib/api";
+import { embedded } from "../lib/embed";
+import SessionSearch from "../components/SessionSearch.vue";
 import { CATS, CAT_CN, color, tk, pct, usd, dms, ago } from "../lib/ctx";
 
 const route = useRoute(), router = useRouter();
@@ -48,7 +50,7 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
 </script>
 
 <template>
-  <div class="pagehead"><h1>上下文洞察</h1><span class="muted">所有 Claude Code 会话的用量、上下文组成和耗时</span></div>
+  <div class="pagehead"><h1>上下文洞察</h1><span class="muted">所有 Claude Code 会话的用量、上下文组成和耗时</span><SessionSearch v-if="embedded" /></div>
   <div class="rangebar">
     <div class="seg"><button v-for="r in RANGES" :key="r.k" :class="{ on: range === r.k }" @click="range = r.k">{{ r.t }}</button></div>
     <span v-if="d" class="muted small">{{ d.from === "0000" ? "全部记录" : `${d.from} 起` }} · 费用按官方价估算，和你实际付的可能不同</span>
@@ -124,6 +126,7 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
 
 <style scoped>
 .pagehead { display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+.pagehead .ss { margin-left: auto; align-self: center; }
 .pagehead h1 { margin: 0; font: 600 26px var(--font-head); }
 .rangebar { display: flex; gap: 14px; align-items: center; margin: 0 0 16px; flex-wrap: wrap; }
 .small { font-size: 12px; }
@@ -161,6 +164,6 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
 .kv b { text-align: right; font: 600 12.5px var(--num); color: var(--ink); }
 .moreline { display: flex; gap: 12px; align-items: center; justify-content: center; margin-top: 14px; }
 .last { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink2); border-top: 1px solid var(--line2); padding-top: 8px; }
-@media (max-width: 1200px) { .top, .row2 { grid-template-columns: minmax(0, 1fr); } .row3 { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi .v { font-size: 21px; } }
+@media (max-width: 980px) { .top, .row2 { grid-template-columns: minmax(0, 1fr); } .row3 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi .v { font-size: 21px; } }
 </style>

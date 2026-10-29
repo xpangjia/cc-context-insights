@@ -5,7 +5,7 @@ import { existsSync } from "fs";
 import { join, normalize } from "path";
 import { ROOT, PORT, CC_ROOT } from "./paths";
 import { cached, invalidate } from "./cache";
-import { insights, sessionSummary, type Range } from "./insights";
+import { insights, sessionSummary, type Range, searchSessions } from "./insights";
 import { contextView, traceView, fleetView, requestBrowser, agentModelOf, titleOf } from "./context";
 
 const DIST = join(ROOT, "web/dist");
@@ -25,6 +25,7 @@ const routes: Record<string, (url: URL) => Response | Promise<Response>> = {
     const q = url.searchParams.get("q") ?? "";
     return json({ ...(await cached(`ins:${range}:${q}`, 15000, async () => insights(range, q))), index: status });
   },
+  "/api/search": url => json(searchSessions(url.searchParams.get("q") ?? "")),
   "/api/session": url => {
     const id = url.searchParams.get("id") ?? "";
     const s = sessionSummary(id);

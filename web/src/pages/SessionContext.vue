@@ -282,5 +282,5 @@ const groupItems = (g: any) => g.items.filter((i: any) => !catQ.value[g.cat] || 
 .ch:hover { background: var(--hover); }
 .cc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd { padding: 4px 0 10px; display: flex; flex-direction: column; gap: 6px; }
-@media (max-width: 1100px) { .row2 { grid-template-columns: minmax(0, 1fr); } .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cmdgrid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .row2 { grid-template-columns: minmax(0, 1fr); } .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cmdgrid { grid-template-columns: minmax(0, 1fr); } }
 </style>

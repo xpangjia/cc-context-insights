@@ -31,7 +31,7 @@ const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 const SKILL_LIST = /skills are available for use with the Skill tool|The following skills are available/i;
 /** 系统自动加进对话的文字:以标签开头(<total_tokens>、<local-command-…>、<task-notification> 等)、环境信息、中断提示 */
 const WRAPPER = /^\s*<([a-z][a-z0-9_-]*)>/i;
-const HARNESS_TEXT = /^\s*(# Environment\b|Caveat:|\[Request interrupted)/;
+const HARNESS_TEXT = /^\s*(# Environment\b|Caveat:|\[Request interrupted|Another Claude session sent a message)/;
 const WRAP_KIND: Record<string, string> = { total_tokens: "余量提示", "task-notification": "任务通知", "local-command-caveat": "命令外壳", "command-name": "命令外壳", "local-command-stdout": "命令外壳" };
 
 export type Item = { cat: Cat; kind: string; tokens: number; text: string; name?: string };

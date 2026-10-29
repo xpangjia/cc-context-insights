@@ -145,5 +145,5 @@ const pick = (id: string | null) => (focus.value = focus.value === id ? null : i
 .mh2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
 .arrow { color: var(--ink3); }
 .mt { font-size: 12.5px; color: var(--ink2); margin-top: 4px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; word-break: break-word; }
-@media (max-width: 1100px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

@@ -90,3 +90,21 @@ export function sessionSummary(id: string) {
   if (!s) return null;
   return { ...s, where: whereOf(s.cwd, s.dir), resume: `claude --resume ${id}` };
 }
+
+/**
+ * 搜会话:不分时间范围,按空格拆词。每个词要出现在标题、最后一句、启动目录、会话 id,或者这个会话里你说过的任何一句话里。
+ * 空查询给最近的几个。命中的是说过的话时,带上那一句(said)方便认出来。
+ */
+export function searchSessions(q: string, limit = 12) {
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+  const hay = "lower(coalesce(s.title, '') || ' ' || coalesce(s.last_prompt, '') || ' ' || coalesce(s.cwd, '') || ' ' || s.id)";
+  const one = `(instr(${hay}, ?) > 0 OR EXISTS (SELECT 1 FROM cc_prompts p WHERE p.session_id = s.id AND instr(lower(p.text), ?) > 0))`;
+  const rows = db.query(`SELECT s.id, s.dir, s.cwd, s.title, s.last_prompt, s.last_at, s.auto, s.subagents FROM cc_sessions s
+    WHERE s.first_at IS NOT NULL ${words.map(() => "AND " + one).join(" ")} ORDER BY s.last_at DESC LIMIT ?`).all(...words.flatMap(w => [w, w]), limit) as any[];
+  const saidQ = db.query("SELECT text FROM cc_prompts WHERE session_id = ? AND instr(lower(text), ?) > 0 ORDER BY at DESC LIMIT 1");
+  return rows.map(r => {
+    const inHead = words.length && words.every(w => `${r.title ?? ""} ${r.last_prompt ?? ""}`.toLowerCase().includes(w));
+    const said = words.length && !inHead ? (saidQ.get(r.id, words[0]) as { text: string } | null)?.text ?? null : null;
+    return { id: r.id, title: r.title, lastPrompt: r.last_prompt, said, lastAt: r.last_at, auto: !!r.auto, subagents: r.subagents, where: whereOf(r.cwd, r.dir) };
+  });
+}
