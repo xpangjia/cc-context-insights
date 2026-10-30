@@ -21,8 +21,8 @@ worker.onerror = e => { status = { ok: false, at: new Date().toISOString(), erro
 const routes: Record<string, (url: URL, req: Request) => Response | Promise<Response>> = {
   "/api/status": () => json({ index: status, logs: CC_ROOT, logsFound: existsSync(CC_ROOT) }),
   "/api/insights": async url => {
-    const r = url.searchParams.get("range") ?? "30d";
-    const range = (["today", "7d", "30d", "all"].includes(r) ? r : "30d") as Range;
+    const r = url.searchParams.get("range") ?? "today";
+    const range = (["today", "7d", "30d", "all"].includes(r) ? r : "today") as Range;
     const q = url.searchParams.get("q") ?? "";
     return json({ ...(await cached(`ins:${range}:${q}`, 15000, async () => insights(range, q))), index: status });
   },

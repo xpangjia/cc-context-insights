@@ -12,7 +12,7 @@ import { CATS, CAT_CN, color, tk, pct, usd, dms, ago, shown } from "../lib/ctx";
 
 const route = useRoute(), router = useRouter();
 const d = ref<any>(null), loading = ref(false);
-const range = ref((route.query.range as string) || "30d");
+const range = ref((route.query.range as string) || "today");
 const limit = ref(24);
 const q = ref(""), sort = ref<"recent" | "billed" | "ctx">("recent"), where = ref(""), heatBy = ref<"billed" | "sessions">("billed");
 const RANGES = [{ k: "today", t: "今天" }, { k: "7d", t: "近 7 天" }, { k: "30d", t: "近 30 天" }, { k: "all", t: "全部" }];
