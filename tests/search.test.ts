@@ -33,3 +33,32 @@ test("按启动目录和会话 id 也能搜", () => {
 });
 test("标题里就有的词不重复给「说过」", () => expect(searchSessions("菌房")[0].said).toBeNull());
 test("别的会话发进来的消息不算你说过的话", () => expect(searchSessions("another claude")).toEqual([]));
+
+import { setLabel, labelsOf } from "../server/labels";
+test("改名后能按新名字搜到,结果带名字;清空名字恢复原标题", () => {
+  setLabel("s1", { name: "工作台配色定稿" });
+  const r = searchSessions("定稿");
+  expect(r.map(h => h.id)).toEqual(["s1"]);
+  expect(r[0].name).toBe("工作台配色定稿");
+  setLabel("s1", { name: "" });
+  expect(labelsOf(["s1"]).get("s1")).toBeUndefined();
+});
+test("固定的会话在搜索里排最前,取消后回到按时间", () => {
+  setLabel("s1", { pinned: true });
+  expect(searchSessions("").map(h => h.id)).toEqual(["s1", "s2"]);
+  expect(searchSessions("")[0].pinned).toBe(true);
+  setLabel("s1", { pinned: false });
+  expect(searchSessions("").map(h => h.id)).toEqual(["s2", "s1"]);
+});
+test("只改名不动固定,只固定不动名字", () => {
+  setLabel("s2", { name: "菌房" }); setLabel("s2", { pinned: true });
+  expect(labelsOf(["s2"]).get("s2")!.name).toBe("菌房");
+  setLabel("s2", { name: "菌房调查" });
+  expect(labelsOf(["s2"]).get("s2")!.pinnedAt).not.toBeNull();
+});
+test("索引格式升级、全部重建后,名字和固定还在", () => {
+  db.query("UPDATE cc_meta SET value = 'old' WHERE key = 'version'").run();
+  indexAll(db, ROOT);
+  expect(labelsOf(["s2"]).get("s2")).toMatchObject({ name: "菌房调查" });
+  expect(searchSessions("")[0].id).toBe("s2");
+});

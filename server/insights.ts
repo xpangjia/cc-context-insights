@@ -9,6 +9,7 @@ import { HOME } from "./paths";
 import { daysAgo, today } from "./time";
 import { costOf, CATS } from "./classify";
 import { ensureSchema } from "./indexer";
+import { labelsOf, pinnedSessions } from "./labels";
 
 ensureSchema(db);
 export type Range = "today" | "7d" | "30d" | "all";
@@ -64,12 +65,14 @@ export function insights(range: Range, q = "") {
   const skills = (db.query(`SELECT skill, count(*) n, max(at) last FROM cc_skills WHERE at >= ? GROUP BY skill ORDER BY n DESC`).all(from) as any[]).filter(s => names.has(s.skill));
   const ss = db.query(`SELECT s.*, x.billed, x.steps FROM cc_sessions s JOIN (
       SELECT session_id, sum(${ACT} + output) billed, count(*) steps FROM cc_requests WHERE ${W} GROUP BY session_id
-    ) x ON x.session_id = s.id ${q ? "WHERE s.title LIKE ? OR s.last_prompt LIKE ?" : ""} ORDER BY s.last_at DESC LIMIT 300`)
-    .all(from, ...(q ? [`%${q}%`, `%${q}%`] : [])) as any[];
+    ) x ON x.session_id = s.id LEFT JOIN cc_labels l ON l.session_id = s.id
+    ${q ? "WHERE s.title LIKE ? OR s.last_prompt LIKE ? OR l.name LIKE ?" : ""} ORDER BY s.last_at DESC LIMIT 300`)
+    .all(from, ...(q ? [`%${q}%`, `%${q}%`, `%${q}%`] : [])) as any[];
+  const labels = labelsOf(ss.map(s => s.id));
   const cards = ss.map(s => {
     const last = db.query(`SELECT *, ${ACT} actual, (${EST}) est FROM cc_requests WHERE session_id = ? AND agent IS NULL AND answered = 1 ORDER BY at DESC LIMIT 1`).get(s.id) as any;
     return {
-      id: s.id, title: s.title, lastPrompt: s.last_prompt, lastAt: s.last_at, auto: !!s.auto, turns: s.prompts, steps: s.steps, billed: s.billed,
+      id: s.id, title: s.title, name: labels.get(s.id)?.name ?? null, pinned: !!labels.get(s.id)?.pinnedAt, lastPrompt: s.last_prompt, lastAt: s.last_at, auto: !!s.auto, turns: s.prompts, steps: s.steps, billed: s.billed,
       cost: costBy("session_id = ? AND day >= ?", [s.id, from]), where: whereOf(s.cwd, s.dir), subagents: s.subagents,
       ctx: last?.actual ?? 0, ctxPct: last ? last.actual / 1_000_000 : 0,
       cats: last && last.est > 0 ? Object.fromEntries(CATS.map(c => [c, Math.round(last[`e_${c}`] * last.actual / last.est)])) : null,
@@ -82,13 +85,15 @@ export function insights(range: Range, q = "") {
     composition: { ...Object.fromEntries(CATS.map(c => [c, Math.round(comp?.[c] ?? 0)])), unsplit: comp?.unsplit ?? 0, output: k.output ?? 0 },
     timing: { modelMs: k.model_ms ?? 0, toolMs: k.tool_ms ?? 0, calls: k.calls ?? 0, tools: k.tools ?? 0, speed: k.model_ms ? (k.output ?? 0) / (k.model_ms / 1000) : 0 },
     week, heat, skills, cards,
+    pinned: pinnedSessions().map(p => ({ id: p.id, title: p.name ?? p.title, lastAt: p.last_at, where: whereOf(p.cwd, p.dir) })),
   };
 }
 
 export function sessionSummary(id: string) {
   const s = db.query("SELECT * FROM cc_sessions WHERE id = ?").get(id) as any;
   if (!s) return null;
-  return { ...s, where: whereOf(s.cwd, s.dir), resume: `claude --resume ${id}` };
+  const l = labelsOf([id]).get(id);
+  return { ...s, where: whereOf(s.cwd, s.dir), resume: `claude --resume ${id}`, name: l?.name ?? null, pinned: !!l?.pinnedAt };
 }
 
 /**
@@ -97,14 +102,16 @@ export function sessionSummary(id: string) {
  */
 export function searchSessions(q: string, limit = 12) {
   const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
-  const hay = "lower(coalesce(s.title, '') || ' ' || coalesce(s.last_prompt, '') || ' ' || coalesce(s.cwd, '') || ' ' || s.id)";
+  const hay = "lower(coalesce(l.name, '') || ' ' || coalesce(s.title, '') || ' ' || coalesce(s.last_prompt, '') || ' ' || coalesce(s.cwd, '') || ' ' || s.id)";
   const one = `(instr(${hay}, ?) > 0 OR EXISTS (SELECT 1 FROM cc_prompts p WHERE p.session_id = s.id AND instr(lower(p.text), ?) > 0))`;
-  const rows = db.query(`SELECT s.id, s.dir, s.cwd, s.title, s.last_prompt, s.last_at, s.auto, s.subagents FROM cc_sessions s
-    WHERE s.first_at IS NOT NULL ${words.map(() => "AND " + one).join(" ")} ORDER BY s.last_at DESC LIMIT ?`).all(...words.flatMap(w => [w, w]), limit) as any[];
+  // 固定的排前面
+  const rows = db.query(`SELECT s.id, s.dir, s.cwd, s.title, s.last_prompt, s.last_at, s.auto, s.subagents, l.name, l.pinned_at FROM cc_sessions s
+    LEFT JOIN cc_labels l ON l.session_id = s.id
+    WHERE s.first_at IS NOT NULL ${words.map(() => "AND " + one).join(" ")} ORDER BY (l.pinned_at IS NOT NULL) DESC, s.last_at DESC LIMIT ?`).all(...words.flatMap(w => [w, w]), limit) as any[];
   const saidQ = db.query("SELECT text FROM cc_prompts WHERE session_id = ? AND instr(lower(text), ?) > 0 ORDER BY at DESC LIMIT 1");
   return rows.map(r => {
-    const inHead = words.length && words.every(w => `${r.title ?? ""} ${r.last_prompt ?? ""}`.toLowerCase().includes(w));
+    const inHead = words.length && words.every(w => `${r.name ?? ""} ${r.title ?? ""} ${r.last_prompt ?? ""}`.toLowerCase().includes(w));
     const said = words.length && !inHead ? (saidQ.get(r.id, words[0]) as { text: string } | null)?.text ?? null : null;
-    return { id: r.id, title: r.title, lastPrompt: r.last_prompt, said, lastAt: r.last_at, auto: !!r.auto, subagents: r.subagents, where: whereOf(r.cwd, r.dir) };
+    return { id: r.id, title: r.title, name: r.name ?? null, pinned: !!r.pinned_at, lastPrompt: r.last_prompt, said, lastAt: r.last_at, auto: !!r.auto, subagents: r.subagents, where: whereOf(r.cwd, r.dir) };
   });
 }

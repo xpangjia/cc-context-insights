@@ -4,8 +4,9 @@ import { ref, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { get } from "../lib/api";
 import { ago } from "../lib/ctx";
+import PinIcon from "./PinIcon.vue";
 
-type Hit = { id: string; title: string | null; lastPrompt: string | null; said: string | null; lastAt: string; auto: boolean; subagents: number; where: string };
+type Hit = { id: string; title: string | null; name: string | null; pinned: boolean; lastPrompt: string | null; said: string | null; lastAt: string; auto: boolean; subagents: number; where: string };
 const router = useRouter();
 const q = ref(""), hits = ref<Hit[]>([]), open = ref(false), cur = ref(0);
 const inp = ref<HTMLInputElement>();
@@ -47,7 +48,7 @@ onUnmounted(() => window.removeEventListener("keydown", slash));
     <div v-if="open" class="dd" tabindex="-1">
       <div class="dh muted">{{ q.trim() ? `找到 ${hits.length === 12 ? "12+" : hits.length} 个` : "最近的会话" }}</div>
       <button v-for="(h, i) in hits" :key="h.id" class="hit" :class="{ on: i === cur }" @mouseenter="cur = i" @mousedown.prevent="go(h)">
-        <div class="ht"><span class="tt">{{ one(h.title) || "（没有输入）" }}</span><span class="tm muted">{{ ago(h.lastAt) }}</span></div>
+        <div class="ht"><span class="tt"><PinIcon v-if="h.pinned" :on="true" :size="11" class="hp" />{{ one(h.name ?? h.title) || "（没有输入）" }}</span><span class="tm muted">{{ ago(h.lastAt) }}</span></div>
         <div class="hm muted"><span class="tag">{{ h.where }}</span><span v-if="h.auto" class="tag">脚本自动</span><span v-if="h.subagents" class="tag">{{ h.subagents }} 个子 Agent</span><span class="lp">{{ h.said ? "说过：" + one(h.said) : one(h.lastPrompt) }}</span></div>
       </button>
       <div v-if="!hits.length" class="none muted">没有匹配的会话</div>
@@ -70,5 +71,6 @@ kbd { position: absolute; right: 8px; font: 11px var(--mono); color: var(--ink3)
 .tm { font-size: 11.5px; white-space: nowrap; }
 .hm { display: flex; gap: 6px; align-items: center; margin-top: 3px; font-size: 12px; min-width: 0; }
 .lp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hp { color: var(--acc); margin-right: 4px; }
 .none { padding: 10px; font-size: 13px; }
 </style>

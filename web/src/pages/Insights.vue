@@ -4,7 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 import Donut from "../components/Donut.vue";
 import BarChart from "../components/BarChart.vue";
 import Heatmap from "../components/Heatmap.vue";
-import { get } from "../lib/api";
+import { get, post } from "../lib/api";
+import PinIcon from "../components/PinIcon.vue";
 import { embedded } from "../lib/embed";
 import SessionSearch from "../components/SessionSearch.vue";
 import { CATS, CAT_CN, color, tk, pct, usd, dms, ago, shown } from "../lib/ctx";
@@ -44,7 +45,9 @@ const weekData = computed(() => (d.value?.week ?? []).map((w: any, i: number, a:
 const heat = computed(() => (d.value?.heat ?? []).map((h: any) => ({ day: h.day, value: heatBy.value === "billed" ? h.billed : h.sessions, label: heatBy.value === "billed" ? `${tk(h.billed)} token` : `${h.sessions} 个会话` })));
 const wheres = computed(() => { const m = new Map<string, number>(); for (const c of d.value?.cards ?? []) m.set(c.where, (m.get(c.where) ?? 0) + 1); return [...m].sort((a, b) => b[1] - a[1]); });
 const cards = computed(() => (d.value?.cards ?? []).filter((c: any) => !where.value || c.where === where.value)
-  .sort((a: any, b: any) => sort.value === "billed" ? b.billed - a.billed : sort.value === "ctx" ? b.ctx - a.ctx : b.lastAt.localeCompare(a.lastAt)));
+  .sort((a: any, b: any) => Number(b.pinned) - Number(a.pinned) || (sort.value === "billed" ? b.billed - a.billed : sort.value === "ctx" ? b.ctx - a.ctx : b.lastAt.localeCompare(a.lastAt))));
+/** 卡片上直接固定/取消:改完重新拉一次,固定栏和排序跟着变 */
+async function togglePin(c: any) { await post("/api/session/label", { id: c.id, pinned: !c.pinned }); await load(); }
 type Seg = { key: string; label: string; value: number; color: string };
 const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as string, label: CAT_CN[k], value: c.cats[k] as number, color: color(k) })), { key: "free", label: "空闲", value: Math.max(0, 1_000_000 - c.ctx), color: "transparent" }] : [];
 </script>
@@ -98,15 +101,22 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
         </div>
       </div>
       <div class="sessions">
+        <div v-if="d.pinned?.length" class="pins">
+          <span class="pl muted"><PinIcon :on="true" :size="12" /> 已固定</span>
+          <RouterLink v-for="p in d.pinned" :key="p.id" :to="`/session?id=${p.id}&tab=context`" class="pin" :title="p.title">
+            <span class="pt">{{ (p.title ?? "（没有输入）").replace(/\s+/g, " ") }}</span><span class="muted">{{ p.where }} · {{ ago(p.lastAt) }}</span>
+          </RouterLink>
+        </div>
         <div class="sbar">
           <b>会话</b><span class="tag">{{ cards.length }}</span>
-          <input v-model="q" class="inp" placeholder="搜标题或最后一句…" />
+          <input v-model="q" class="inp" placeholder="搜名称、标题或最后一句…" />
           <select v-model="where" class="inp"><option value="">全部位置</option><option v-for="[w, n] in wheres" :key="w" :value="w">{{ w }}（{{ n }}）</option></select>
           <div class="seg sm"><button :class="{ on: sort === 'recent' }" @click="sort = 'recent'">最近</button><button :class="{ on: sort === 'billed' }" @click="sort = 'billed'">Token 总量</button><button :class="{ on: sort === 'ctx' }" @click="sort = 'ctx'">当前上下文</button></div>
         </div>
         <div class="cards">
           <RouterLink v-for="c in cards.slice(0, limit)" :key="c.id" :to="`/session?id=${c.id}&tab=context`" class="card sc">
-            <div class="sh"><div class="st">{{ (c.title ?? "（没有输入）").replace(/\s+/g, " ") }}</div><div class="sa muted">{{ ago(c.lastAt) }}<br>{{ c.lastAt.slice(0, 10) }}</div></div>
+            <div class="sh"><div class="st"><PinIcon v-if="c.pinned" :on="true" :size="12" class="cp" />{{ (c.name ?? c.title ?? "（没有输入）").replace(/\s+/g, " ") }}</div>
+              <button class="pinbtn" :class="{ on: c.pinned }" :title="c.pinned ? '取消固定' : '固定到最前面'" @click.prevent.stop="togglePin(c)"><PinIcon :on="c.pinned" :size="13" /></button><div class="sa muted">{{ ago(c.lastAt) }}<br>{{ c.lastAt.slice(0, 10) }}</div></div>
             <div class="tags"><span class="tag">{{ c.where }}</span><span v-if="c.auto" class="tag">脚本自动</span><span v-if="c.subagents" class="tag">{{ c.subagents }} 个子 Agent</span></div>
             <div class="sb">
               <Donut v-if="c.cats" :segs="miniSegs(c)" :center="tk(c.ctx)" :center-sub="pct(c.ctxPct)" :size="74" bare />
@@ -154,6 +164,18 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--gap); }
 .sc { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; transition: border-color .15s; min-width: 0; }
 .sc:hover { border-color: var(--acc); }
+.sc { position: relative; }
+.pinbtn { position: absolute; top: 10px; right: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink3); border-radius: 7px; width: 26px; height: 24px; display: none; place-items: center; cursor: pointer; padding: 0; }
+.sc:hover .pinbtn { display: grid; }
+.pinbtn:hover, .pinbtn.on { color: var(--acc); border-color: var(--acc); }
+.sc:hover .sa { visibility: hidden; }
+.cp { color: var(--acc); margin-right: 5px; }
+.pins { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.pl { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.pin { display: inline-flex; gap: 8px; align-items: baseline; max-width: 340px; border: 1px solid var(--line); background: var(--card); border-radius: 9px; padding: 5px 11px; font-size: 13px; }
+.pin:hover { border-color: var(--acc); }
+.pin .pt { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pin .muted { font-size: 11.5px; white-space: nowrap; }
 .sh { display: flex; gap: 10px; justify-content: space-between; }
 .st { font-weight: 600; font-size: 14px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.5; }
 .sa { font-size: 11.5px; text-align: right; white-space: nowrap; }

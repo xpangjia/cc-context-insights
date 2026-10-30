@@ -6,6 +6,7 @@ import { join, normalize } from "path";
 import { ROOT, PORT, CC_ROOT } from "./paths";
 import { cached, invalidate } from "./cache";
 import { insights, sessionSummary, type Range, searchSessions } from "./insights";
+import { labelsOf, setLabel } from "./labels";
 import { contextView, traceView, fleetView, requestBrowser, agentModelOf, titleOf } from "./context";
 
 const DIST = join(ROOT, "web/dist");
@@ -17,13 +18,28 @@ const worker = new Worker(new URL("./worker.ts", import.meta.url).href);
 worker.onmessage = e => { status = e.data; invalidate("ins:"); };
 worker.onerror = e => { status = { ok: false, at: new Date().toISOString(), error: String(e.message) }; };
 
-const routes: Record<string, (url: URL) => Response | Promise<Response>> = {
+const routes: Record<string, (url: URL, req: Request) => Response | Promise<Response>> = {
   "/api/status": () => json({ index: status, logs: CC_ROOT, logsFound: existsSync(CC_ROOT) }),
   "/api/insights": async url => {
     const r = url.searchParams.get("range") ?? "30d";
     const range = (["today", "7d", "30d", "all"].includes(r) ? r : "30d") as Range;
     const q = url.searchParams.get("q") ?? "";
     return json({ ...(await cached(`ins:${range}:${q}`, 15000, async () => insights(range, q))), index: status });
+  },
+  // 名称和固定:GET 列出全部(给嵌入方用),POST 改一个
+  "/api/labels": () => json(Object.fromEntries(labelsOf())),
+  "/api/session/label": async (url, req) => {
+    if (req.method !== "POST") return json({ error: "只接受 POST" }, 405);
+    // 只听本机,但浏览器里别的网站也能往 127.0.0.1 发请求:要求 JSON,且来源是本机页面或没有来源(命令行/嵌入方的后端)
+    const origin = req.headers.get("origin");
+    if (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) return json({ error: "不接受外部网页的请求" }, 403);
+    if (!(req.headers.get("content-type") ?? "").includes("application/json")) return json({ error: "要用 JSON" }, 415);
+    const b = await req.json().catch(() => null) as any;
+    const id = String(b?.id ?? "");
+    if (!sessionSummary(id)) return json({ error: "找不到这个会话" }, 404);
+    const l = setLabel(id, { name: typeof b.name === "string" ? b.name : undefined, pinned: typeof b.pinned === "boolean" ? b.pinned : undefined });
+    invalidate("ins:");
+    return json({ ok: true, name: l.name, pinned: !!l.pinnedAt });
   },
   "/api/search": url => json(searchSessions(url.searchParams.get("q") ?? "")),
   "/api/session": url => {
@@ -49,7 +65,7 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     const h = routes[url.pathname];
-    if (h) { try { return await h(url); } catch (e) { console.error(url.pathname, e); return json({ error: String(e) }, 500); } }
+    if (h) { try { return await h(url, req); } catch (e) { console.error(url.pathname, e); return json({ error: String(e) }, 500); } }
     if (url.pathname.startsWith("/api/")) return new Response("not found", { status: 404 });
     const p = normalize(join(DIST, decodeURIComponent(url.pathname)));
     if (p.startsWith(DIST) && url.pathname !== "/" && existsSync(p) && !p.endsWith("/")) return new Response(Bun.file(p));

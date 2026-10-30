@@ -47,6 +47,8 @@ export function ensureSchema(db: Database) {
   try { db.exec("ALTER TABLE cc_files ADD COLUMN state TEXT"); } catch {}
   try { db.exec("ALTER TABLE cc_sessions ADD COLUMN auto INTEGER DEFAULT 0"); } catch {}
   try { db.exec("ALTER TABLE cc_requests ADD COLUMN e_base INTEGER DEFAULT 0"); } catch {}
+  // 手动设的名称和固定:不在重建清空的表里
+  db.exec("CREATE TABLE IF NOT EXISTS cc_labels (session_id TEXT PRIMARY KEY, name TEXT, pinned_at TEXT)");
 }
 
 /** 索引格式版本:改了解析口径就加一,启动时发现旧版本会清空重建 */
