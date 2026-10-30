@@ -7,7 +7,7 @@ import Heatmap from "../components/Heatmap.vue";
 import { get } from "../lib/api";
 import { embedded } from "../lib/embed";
 import SessionSearch from "../components/SessionSearch.vue";
-import { CATS, CAT_CN, color, tk, pct, usd, dms, ago } from "../lib/ctx";
+import { CATS, CAT_CN, color, tk, pct, usd, dms, ago, shown } from "../lib/ctx";
 
 const route = useRoute(), router = useRouter();
 const d = ref<any>(null), loading = ref(false);
@@ -28,7 +28,7 @@ onMounted(load);
 const compSegs = computed(() => {
   if (!d.value) return [];
   const c = d.value.composition;
-  return [...CATS.map(k => ({ key: k, label: CAT_CN[k], value: c[k], color: color(k), sub: `约 ${tk(c[k])}` })),
+  return [...shown(k => c[k] > 0).map(k => ({ key: k, label: CAT_CN[k], value: c[k], color: color(k), sub: k === "base" ? `约 ${tk(c[k])} · 日志里没有，推算的合计` : `约 ${tk(c[k])}` })),
     { key: "output", label: "输出", value: c.output, color: color("output"), sub: tk(c.output) }];
 });
 const splitTotal = computed(() => d.value ? CATS.reduce((s, k) => s + d.value.composition[k], 0) + d.value.composition.output : 0);
@@ -76,7 +76,7 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
       <div class="card">
         <h2 class="card-title">Token 统计<span class="more muted">缓存命中 {{ pct(d.kpi.cacheHit) }}</span></h2>
         <Donut :segs="compSegs" :center="tk(splitTotal)" center-sub="能拆分的用量" :size="130" />
-        <div v-if="unsplitShare > 0.01" class="note muted">另有 {{ tk(d.composition.unsplit) }}（占 {{ pct(unsplitShare, 0) }}）来自旧版 Claude Code 的会话，那时不记录请求内容，拆不开类别，没算进环里</div>
+        <div v-if="unsplitShare > 0.01" class="note muted">另有 {{ tk(d.composition.unsplit) }}（占 {{ pct(unsplitShare, 0) }}）的请求在日志里找不到对应的对话内容，拆不开类别，没算进环里</div>
       </div>
       <div class="card">
         <h2 class="card-title">耗时统计<span class="more muted">输出速度 {{ Math.round(d.timing.speed) }} token/秒</span></h2>

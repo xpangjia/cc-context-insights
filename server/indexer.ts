@@ -6,11 +6,16 @@
  * 每次请求的上下文 = 上一次同来源请求的前 keep 条消息 + 这次 tail 里的消息(api-request)。
  * tail 里有存档的消息在 api-request-blob 里;没存档的(排在前面)= 上一次请求得到的回复 + 紧跟其后的工具返回。
  * 同一条回复会拆成多行写(思考、文字、工具调用各一行),每行都带同一份 usage → 按 message.id 只算一次。
+ *
+ * 不是所有 Claude Code 都写 api-request。没有的话从对话本身还原:上次压缩以来的每条消息、回复、工具返回、
+ * 注入的附件(attachment)按顺序累加,每来一条新回复就把累计值记成这次请求的上下文;
+ * 系统提示词和工具定义取最近的 prompt_snapshot 附件;连快照也没有就记成「系统与工具(合计)」,
+ * 取第一次请求的「实际输入 − 对话部分」(一个会话里基本不变)。
  */
 import { Database } from "bun:sqlite";
 import { readdirSync, statSync, existsSync, openSync, readSync, closeSync } from "fs";
 import { join, basename } from "path";
-import { messageVec, shapeVec, zero, addVec, capMs, NO_TIME_TOOLS, MAX_CALL_MS, type Vec } from "./classify";
+import { messageVec, shapeVec, attachmentVec, snapshotShape, zero, addVec, capMs, NO_TIME_TOOLS, MAX_CALL_MS, type Vec } from "./classify";
 
 export const CC_SCHEMA = `
 CREATE TABLE IF NOT EXISTS cc_files (path TEXT PRIMARY KEY, size INTEGER, mtime REAL, offset INTEGER, session_id TEXT);
@@ -27,7 +32,7 @@ CREATE INDEX IF NOT EXISTS cc_skills_at ON cc_skills (at);
 CREATE TABLE IF NOT EXISTS cc_requests (
   id TEXT PRIMARY KEY, session_id TEXT, agent TEXT, at TEXT, day TEXT, source TEXT, model TEXT,
   input INTEGER DEFAULT 0, cache_read INTEGER DEFAULT 0, w5 INTEGER DEFAULT 0, w1h INTEGER DEFAULT 0, output INTEGER DEFAULT 0,
-  e_system INTEGER DEFAULT 0, e_tools INTEGER DEFAULT 0, e_user INTEGER DEFAULT 0, e_inject INTEGER DEFAULT 0, e_skill INTEGER DEFAULT 0,
+  e_system INTEGER DEFAULT 0, e_tools INTEGER DEFAULT 0, e_base INTEGER DEFAULT 0, e_user INTEGER DEFAULT 0, e_inject INTEGER DEFAULT 0, e_skill INTEGER DEFAULT 0,
   e_assistant INTEGER DEFAULT 0, e_tool INTEGER DEFAULT 0, msgs INTEGER DEFAULT 0, last_at TEXT, model_ms INTEGER DEFAULT 0,
   tool_ms INTEGER DEFAULT 0, tool_calls INTEGER DEFAULT 0, answered INTEGER DEFAULT 0
 );
@@ -36,8 +41,16 @@ CREATE INDEX IF NOT EXISTS cc_requests_d ON cc_requests (day);
 CREATE TABLE IF NOT EXISTS cc_meta (key TEXT PRIMARY KEY, value TEXT);
 `;
 
+/** 建表 + 给老库补列(索引线程和网页线程都要调,谁先跑都行) */
+export function ensureSchema(db: Database) {
+  db.exec(CC_SCHEMA);
+  try { db.exec("ALTER TABLE cc_files ADD COLUMN state TEXT"); } catch {}
+  try { db.exec("ALTER TABLE cc_sessions ADD COLUMN auto INTEGER DEFAULT 0"); } catch {}
+  try { db.exec("ALTER TABLE cc_requests ADD COLUMN e_base INTEGER DEFAULT 0"); } catch {}
+}
+
 /** 索引格式版本:改了解析口径就加一,启动时发现旧版本会清空重建 */
-export const CC_VERSION = "8";
+export const CC_VERSION = "9";
 
 const SKIP_PREFIX = ['{"type":"mode"', '{"type":"permission-mode"', '{"type":"atis-latch"', '{"type":"file-history', '{"type":"queue-operation"'];
 
@@ -77,8 +90,11 @@ type State = {
   chains: Record<string, Vec[]>; shapes: Record<string, [number, number]>; blobs: Record<string, Vec>;
   lastReq: Record<string, string>; pendReply: Record<string, Vec>; pendTools: Vec; skillIds: string[];
   lastMsgId: string | null; toolStart: Record<string, [string, string]>; // tool_use id → [时间, 所属请求]
+  // 没有 api-request 时从对话还原:api = 这个文件里见过 api-request;tvec = 上次压缩以来累计的消息;tsys = 最近快照的系统提示词/工具定义
+  api: boolean; tvec: Vec; tsys: [number, number] | null; lastUserTs: string | null; base: number | null;
 };
-const newState = (): State => ({ chains: {}, shapes: {}, blobs: {}, lastReq: {}, pendReply: {}, pendTools: zero(), skillIds: [], lastMsgId: null, toolStart: {} });
+const newState = (): State => ({ chains: {}, shapes: {}, blobs: {}, lastReq: {}, pendReply: {}, pendTools: zero(), skillIds: [], lastMsgId: null, toolStart: {},
+  api: false, tvec: zero(), tsys: null, lastUserTs: null, base: null });
 
 type ReqRow = { id: string; at: string; source: string; model: string | null; e: number[]; msgs: number };
 type ReqUpd = { model: string | null; input: number; read: number; w5: number; w1h: number; output: number; lastAt: string | null; toolMs: number; toolCalls: number; answered: number };
@@ -101,7 +117,8 @@ function parseLines(text: string, acc: Acc) {
   const skillIds = new Set(st.skillIds);
   for (const line of text.split("\n")) {
     if (!line || SKIP_PREFIX.some(p => line.startsWith(p))) continue;
-    if (line.slice(0, 400).includes('"attachment":{')) continue;
+    // 有请求记录时附件已经包含在请求里,跳过省时间;没有时附件是上下文的一部分
+    if (st.api && line.slice(0, 400).includes('"attachment":{')) continue;
     let d: any;
     try { d = JSON.parse(line); } catch { continue; }
     const t = d.type;
@@ -109,23 +126,24 @@ function parseLines(text: string, acc: Acc) {
     if (t === "api-request-shape") { st.shapes[d.shapeHash] = shapeVec(d.shape); continue; }
     if (t === "api-request-blob") { st.blobs[d.hash] = messageVec(d.message, skillIds); continue; }
     if (t === "api-request") {
+      st.api = true;
       const src = d.querySource ?? "main";
       const chain = (st.chains[src] ?? []).slice(0, d.keep ?? 0);
-      let missing = 0;
+      // 没存档的条目:老格式是「上一次的回复、紧跟其后的工具返回」都没存档;新格式回复存了档,只有工具返回没存。
+      // 所以补缺时看这段 tail 里有没有回复:还没有就补回复,有了就补工具返回。(助手消息只含 assistant 类,下标 3)
+      let replyIn = false, toolsIn = false;
       for (const h of d.tail ?? []) {
         const b = st.blobs[h];
-        if (b) { chain.push(b); delete st.blobs[h]; continue; }
-        // 没存档的:第一条是上一次请求的回复,第二条是紧跟其后的工具返回
-        if (missing === 0) { const prev = st.lastReq[src]; chain.push(prev ? st.pendReply[prev] ?? zero() : zero()); if (prev) delete st.pendReply[prev]; }
-        else if (missing === 1) chain.push(st.pendTools);
+        if (b) { chain.push(b); if (b[3] > 0 && b.every((x, i) => i === 3 || x === 0)) replyIn = true; delete st.blobs[h]; continue; }
+        if (!replyIn) { const prev = st.lastReq[src]; chain.push(prev ? st.pendReply[prev] ?? zero() : zero()); if (prev) delete st.pendReply[prev]; replyIn = true; }
+        else if (!toolsIn) { chain.push(st.pendTools); toolsIn = true; }
         else chain.push(zero());
-        missing++;
       }
       st.pendTools = zero();
       st.chains[src] = chain;
       const sum = chain.reduce(addVec, zero());
       const sh = st.shapes[d.shapeHash] ?? [0, 0];
-      acc.reqs.push({ id: d.id, at: d.timestamp, source: src, model: d.params?.model ?? null, e: [sh[0], sh[1], ...sum], msgs: chain.length });
+      acc.reqs.push({ id: d.id, at: d.timestamp, source: src, model: d.params?.model ?? null, e: [sh[0], sh[1], 0, ...sum], msgs: chain.length });
       st.lastReq[src] = d.id;
       continue;
     }
@@ -136,8 +154,22 @@ function parseLines(text: string, acc: Acc) {
     if (d.cwd && !acc.cwd) acc.cwd = d.cwd;
     if (d.gitBranch) acc.branch = d.gitBranch;
     if (d.entrypoint && !acc.entry) acc.entry = d.entrypoint;
+    // 子 Agent 文件里每行都是 sidechain;主文件里的 sidechain 是老版本内联的子任务,不在主对话上下文里
+    const inChain = !st.api && (acc.sub || !d.isSidechain);
+
+    if (t === "attachment") {
+      const a = d.attachment;
+      if (!inChain || !a) continue;
+      if (a.type === "prompt_snapshot") {
+        const [sys, tools] = shapeVec(snapshotShape(a));
+        st.tsys = [sys || st.tsys?.[0] || 0, Array.isArray(a.tools) ? tools : st.tsys?.[1] ?? 0];
+      } else st.tvec = addVec(st.tvec, attachmentVec(a));
+      continue;
+    }
+    if (t === "system") { if (d.subtype === "compact_boundary" && inChain) st.tvec = zero(); continue; }
 
     if (t === "user") {
+      if (inChain) { st.tvec = addVec(st.tvec, messageVec(d.message, skillIds)); if (ts) st.lastUserTs = ts; }
       const content = d.message?.content;
       const results = Array.isArray(content) ? content.filter((c: any) => c?.type === "tool_result") : [];
       if (results.length) {
@@ -164,6 +196,17 @@ function parseLines(text: string, acc: Acc) {
       // 回复内容(每行是不同的块)累计到这次请求名下,下一次请求把它当成「没存档的回复」用
       if (ref) st.pendReply[ref] = addVec(st.pendReply[ref] ?? zero(), messageVec(m, skillIds));
       const u = m.usage;
+      if (inChain && ref && u && ts && m.id !== st.lastMsgId) {
+        // 没有请求记录:这次请求的上下文 = 到这条回复之前累计的全部
+        const actual = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+        const msgSum = st.tvec.reduce((a, b) => a + b, 0);
+        // 没有快照:系统提示词和工具定义在一个会话里基本不变,取第一次请求的「实际输入 − 对话部分」当合计,后面沿用
+        // (越往后对话越长,估算误差越大,不能每次都拿余数)
+        if (!st.tsys && st.base === null) st.base = Math.max(0, actual - msgSum);
+        const head = st.tsys ? [st.tsys[0], st.tsys[1], 0] : [0, 0, st.base ?? 0];
+        acc.reqs.push({ id: ref, at: st.lastUserTs ?? ts, source: "transcript", model: m.model ?? null, e: [...head, ...st.tvec], msgs: 0 });
+      }
+      if (inChain) st.tvec = addVec(st.tvec, messageVec(m, skillIds));
       if (u && ts && m.id !== st.lastMsgId) {
         st.lastMsgId = m.id ?? null;
         acc.replies++;
@@ -228,9 +271,7 @@ function listFiles(root: string) {
 }
 
 export function indexAll(db: Database, root: string, log = (_: string) => {}) {
-  db.exec(CC_SCHEMA);
-  try { db.exec("ALTER TABLE cc_files ADD COLUMN state TEXT"); } catch {}
-  try { db.exec("ALTER TABLE cc_sessions ADD COLUMN auto INTEGER DEFAULT 0"); } catch {}
+  ensureSchema(db);
   const ver = (db.query("SELECT value FROM cc_meta WHERE key = 'version'").get() as { value: string } | null)?.value;
   if (ver !== CC_VERSION) {
     for (const t of ["cc_files", "cc_sessions", "cc_skills", "cc_prompts", "cc_requests"]) db.exec(`DELETE FROM ${t}`);
@@ -291,8 +332,8 @@ function save(db: Database, a: Acc, path: string, size: number, mtime: number, o
     for (const [at, s, via] of a.skills) sq.run(a.sid, localTs(at), s, via);
     const pq = db.query("INSERT INTO cc_prompts (session_id, at, text) VALUES (?, ?, ?)");
     for (const [at, t] of a.said) pq.run(a.sid, localTs(at), t);
-    const rq = db.query(`INSERT OR IGNORE INTO cc_requests (id, session_id, agent, at, day, source, model, e_system, e_tools, e_user, e_inject, e_skill, e_assistant, e_tool, msgs)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const rq = db.query(`INSERT OR IGNORE INTO cc_requests (id, session_id, agent, at, day, source, model, e_system, e_tools, e_base, e_user, e_inject, e_skill, e_assistant, e_tool, msgs)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const r of a.reqs) rq.run(r.id, a.sid, a.agent, localTs(r.at), localDay(r.at), r.source, r.model, ...r.e.map(x => Math.round(x)), r.msgs);
     const uq = db.query(`UPDATE cc_requests SET input = input + $i, cache_read = cache_read + $r, w5 = w5 + $w5, w1h = w1h + $w1h, output = output + $o,
       tool_ms = tool_ms + $tm, tool_calls = tool_calls + $tc, answered = MAX(answered, $an),

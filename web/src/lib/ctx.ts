@@ -1,8 +1,14 @@
 /** 上下文七类:名字、颜色、格式化 */
-export const CATS = ["system", "tools", "user", "inject", "skill", "assistant", "tool"] as const;
+/** base = 系统与工具合计:日志里没有系统提示词和工具定义时才有,其他时候是 0,界面上不显示 */
+export const CATS = ["system", "tools", "base", "user", "inject", "skill", "assistant", "tool"] as const;
+/** 「系统与工具(合计)」只在有值时显示;只有合计、没有分开的系统提示词和工具定义时,那两项不显示 0 */
+export const shown = (has: (c: string) => boolean) => {
+  const onlyBase = has("base") && !has("system") && !has("tools");
+  return CATS.filter(c => (c === "base" ? has(c) : c === "system" || c === "tools" ? !onlyBase : true));
+};
 export type Cat = (typeof CATS)[number];
 export const CAT_CN: Record<string, string> = {
-  system: "系统提示词", tools: "工具定义", user: "用户消息", inject: "注入内容", skill: "技能注入", assistant: "助手消息", tool: "工具结果",
+  system: "系统提示词", tools: "工具定义", base: "系统与工具（合计）", user: "用户消息", inject: "注入内容", skill: "技能注入", assistant: "助手消息", tool: "工具结果",
   output: "输出", unsplit: "未拆分（旧版记录）", free: "空闲窗口",
 };
 export const color = (c: string) => `var(--c-${c})`;

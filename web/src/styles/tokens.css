@@ -93,9 +93,9 @@ pre.log { margin: 0; background: var(--card); border: 1px solid var(--line); bor
 /* 上下文七类的颜色:图表规范的标准分类色,按固定顺序取前 7 个;在本站浅色/深色卡片底上校验通过(浅色有三色对比度不足 3:1,图上一律配文字标签) */
 :root {
   --c-system: #2a78d6; --c-tools: #eb6834; --c-user: #1baf7a; --c-inject: #eda100; --c-skill: #e87ba4; --c-assistant: #008300; --c-tool: #6250d6;
-  --c-output: #e34948; --c-unsplit: #c9c4ba; --c-free: #ece8df;
+  --c-output: #e34948; --c-base: #8f8a7e; --c-unsplit: #c9c4ba; --c-free: #ece8df;
 }
 @media (prefers-color-scheme: dark) {
   :root { --c-system: #3987e5; --c-tools: #d95926; --c-user: #199e70; --c-inject: #c98500; --c-skill: #d55181; --c-assistant: #008300; --c-tool: #9085e9;
-    --c-output: #e66767; --c-unsplit: #4a4740; --c-free: #2e2c27; }
+    --c-output: #e66767; --c-base: #8a8478; --c-unsplit: #4a4740; --c-free: #2e2c27; }
 }

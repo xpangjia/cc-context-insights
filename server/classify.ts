@@ -4,10 +4,11 @@
  * token 先按字数估,用的时候再按这次请求的实际输入总量等比缩放
  */
 
-export const CATS = ["system", "tools", "user", "inject", "skill", "assistant", "tool"] as const;
+/** base = 系统提示词和工具定义合计:日志里既没有请求记录也没有提示词快照时,只能按「实际输入 − 对话部分」推算出合计,拆不开 */
+export const CATS = ["system", "tools", "base", "user", "inject", "skill", "assistant", "tool"] as const;
 export type Cat = (typeof CATS)[number];
 export const CAT_CN: Record<Cat, string> = {
-  system: "系统提示词", tools: "工具定义", user: "用户消息", inject: "注入内容", skill: "技能注入", assistant: "助手消息", tool: "工具结果",
+  system: "系统提示词", tools: "工具定义", base: "系统与工具（合计）", user: "用户消息", inject: "注入内容", skill: "技能注入", assistant: "助手消息", tool: "工具结果",
 };
 /** 消息里会出现的五类(系统提示词和工具定义来自请求外壳) */
 export const MSG_CATS = ["user", "inject", "skill", "assistant", "tool"] as const;
@@ -28,7 +29,6 @@ export function est(s: string | undefined | null): number {
 }
 
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
-const SKILL_LIST = /skills are available for use with the Skill tool|The following skills are available/i;
 /** 系统自动加进对话的文字:以标签开头(<total_tokens>、<local-command-…>、<task-notification> 等)、环境信息、中断提示 */
 const WRAPPER = /^\s*<([a-z][a-z0-9_-]*)>/i;
 const HARNESS_TEXT = /^\s*(# Environment\b|Caveat:|\[Request interrupted|Another Claude session sent a message)/;
@@ -36,17 +36,35 @@ const WRAP_KIND: Record<string, string> = { total_tokens: "余量提示", "task-
 
 export type Item = { cat: Cat; kind: string; tokens: number; text: string; name?: string };
 
+/**
+ * 一段注入文字里如果夹着技能目录(新版 Claude Code 会把环境信息、智能体目录、MCP 说明、技能目录拼成一条),
+ * 把技能目录那段切出来算技能注入,其余还算注入内容。技能目录从提示句开始,到下一个「# 」标题或文字结尾。
+ */
+const SKILL_HEAD = /^.*(skills are available for use with the Skill tool|The following skills are available).*$/m;
+function splitSkill(text: string, kind: string): Item[] {
+  const m = SKILL_HEAD.exec(text);
+  if (!m) return [{ cat: "inject", kind, tokens: est(text), text }];
+  const start = m.index;
+  const restAfter = text.slice(start + m[0].length);
+  const nextHead = restAfter.search(/\n#{1,2} |\n<\/system-reminder>/);
+  const end = nextHead < 0 ? text.length : start + m[0].length + nextHead;
+  const out: Item[] = [];
+  const before = text.slice(0, start), skill = text.slice(start, end), after = text.slice(end);
+  if (before.trim()) out.push({ cat: "inject", kind, tokens: est(before), text: before });
+  out.push({ cat: "skill", kind: "技能目录", tokens: est(skill), text: skill });
+  if (after.replace(/<\/?system-reminder>/g, "").trim()) out.push({ cat: "inject", kind, tokens: est(after), text: after });
+  return out;
+}
+
 /** 一段用户文字拆开:提醒(注入/技能目录) + 命令外壳(注入) + 剩下的才是你真正打的字 */
 export function splitUserText(text: string): Item[] {
   const out: Item[] = [];
-  for (const m of text.match(REMINDER) ?? []) {
-    out.push({ cat: SKILL_LIST.test(m) ? "skill" : "inject", kind: SKILL_LIST.test(m) ? "技能目录" : "系统提醒", tokens: est(m), text: m });
-  }
+  for (const m of text.match(REMINDER) ?? []) out.push(...splitSkill(m, "系统提醒"));
   const rest = text.replace(REMINDER, "").trim();
   if (rest) {
     const w = rest.match(WRAPPER);
-    if (w) out.push({ cat: "inject", kind: WRAP_KIND[w[1]] ?? "系统包装", tokens: est(rest), text: rest });
-    else if (HARNESS_TEXT.test(rest)) out.push({ cat: "inject", kind: /Environment/.test(rest.slice(0, 20)) ? "环境信息" : "系统包装", tokens: est(rest), text: rest });
+    if (w) out.push(...splitSkill(rest, WRAP_KIND[w[1]] ?? "系统包装"));
+    else if (HARNESS_TEXT.test(rest)) out.push(...splitSkill(rest, /Environment/.test(rest.slice(0, 20)) ? "环境信息" : "系统包装"));
     else out.push({ cat: "user", kind: "输入", tokens: est(rest), text: rest });
   }
   return out;
@@ -61,6 +79,13 @@ const resultText = (c: any): string =>
  */
 export function messageItems(msg: any, skillIds: Set<string>, toolNames?: Map<string, string>): Item[] {
   const out: Item[] = [];
+  if (msg?.role === "attachment") return attachmentItems(msg.attachment);
+  // 对话中间的 system 消息(新版用来放环境信息、目录等)全是注入,不会是你打的字
+  if (msg?.role === "system") {
+    const c = msg.content;
+    const texts = typeof c === "string" ? [c] : Array.isArray(c) ? c.filter((x: any) => x?.type === "text").map((x: any) => x.text ?? "") : [];
+    return texts.flatMap(t => splitSkill(t, /^\s*# Environment/.test(t) ? "环境信息" : /^\s*<total_tokens>/.test(t) ? "余量提示" : "系统消息"));
+  }
   const content = msg?.content;
   if (msg?.role === "assistant") {
     for (const c of Array.isArray(content) ? content : [{ type: "text", text: String(content ?? "") }]) {
@@ -91,6 +116,37 @@ export function messageItems(msg: any, skillIds: Set<string>, toolNames?: Map<st
   }
   return out;
 }
+
+// ---------- 附件(没有请求记录时的上下文来源) ----------
+
+/**
+ * Claude Code 把注入内容(技能目录、环境、日期、智能体目录……)记成 attachment 行,发请求时渲染进用户消息。
+ * prompt_snapshot 是系统提示词和工具定义的快照,当请求外壳用;下面这些不发给模型。
+ */
+const NOT_SENT = new Set(["prompt_snapshot", "credential_org", "remote_session_change", "queued_command"]);
+const ATT_KIND: Record<string, string> = {
+  skill_listing: "技能目录", environment: "环境信息", date: "日期", total_tokens_reminder: "余量提示", session_context: "会话信息",
+  agent_listing_delta: "智能体目录", deferred_tools_delta: "延迟加载的工具", mcp_instructions_delta: "MCP 说明", model: "模型说明",
+  file: "文件", nested_memory: "记忆文件", todo_reminder: "待办提醒", plan_mode: "计划模式",
+};
+export function attachmentItems(a: any): Item[] {
+  if (!a?.type || NOT_SENT.has(a.type)) return [];
+  const { type, ...rest } = a;
+  const text = typeof a.content === "string" ? a.content : typeof a.text === "string" ? a.text : JSON.stringify(rest);
+  const skill = type === "skill_listing" || type === "invoked_skills";
+  return [{ cat: skill ? "skill" : "inject", kind: ATT_KIND[type] ?? `附件 ${type}`, tokens: est(text) + 4, text }];
+}
+/** prompt_snapshot → 和 api-request-shape 一样的外壳结构 */
+export const snapshotShape = (a: any) => ({
+  system: (Array.isArray(a?.systemPrompt) ? a.systemPrompt : a?.systemPrompt ? [a.systemPrompt] : []).map((t: any) => ({ text: typeof t === "string" ? t : t?.text ?? "" })),
+  // 快照里的 schema 有时本身就是完整工具定义(含名字和说明),直接用它,别把说明算两遍
+  tools: (Array.isArray(a?.tools) ? a.tools : []).map((t: any) => t?.schema?.name ? t.schema : { name: t?.name, description: t?.description, input_schema: t?.schema ?? t?.input_schema }),
+});
+export const attachmentVec = (a: any): Vec => {
+  const v = zero();
+  for (const it of attachmentItems(a)) if (it.cat in IDX) v[IDX[it.cat as keyof typeof IDX]] += it.tokens;
+  return v;
+};
 
 export function messageVec(msg: any, skillIds: Set<string>): Vec {
   const v = zero();

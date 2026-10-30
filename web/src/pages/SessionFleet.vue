@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from "vue";
 import StackBar from "../components/StackBar.vue";
 import { get } from "../lib/api";
-import { CATS, CAT_CN, color, tk, pct, usd, dms } from "../lib/ctx";
+import { CATS, CAT_CN, color, tk, pct, usd, dms, shown } from "../lib/ctx";
 
 const props = defineProps<{ id: string }>();
 const emit = defineEmits<{ context: [agent: string] }>();
@@ -50,7 +50,7 @@ const pick = (id: string | null) => (focus.value = focus.value === id ? null : i
             </div>
           </div>
         </div>
-        <div class="lg"><span v-for="k in CATS" :key="k"><i :style="{ background: color(k) }"></i>{{ CAT_CN[k] }}</span><span class="muted">条形 = 当前上下文占 100 万窗口的组成</span></div>
+        <div class="lg"><span v-for="k in shown(() => [d.main, ...subs].some((s: any) => s.cats?.base))" :key="k"><i :style="{ background: color(k) }"></i>{{ CAT_CN[k] }}</span><span class="muted">条形 = 当前上下文占 100 万窗口的组成</span></div>
       </div>
 
       <div class="col">

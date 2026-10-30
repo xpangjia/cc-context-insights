@@ -8,9 +8,9 @@ import { db } from "./db";
 import { HOME } from "./paths";
 import { daysAgo, today } from "./time";
 import { costOf, CATS } from "./classify";
-import { CC_SCHEMA } from "./indexer";
+import { ensureSchema } from "./indexer";
 
-db.exec(CC_SCHEMA);
+ensureSchema(db);
 export type Range = "today" | "7d" | "30d" | "all";
 export const fromOf = (r: Range) => r === "today" ? today() : r === "7d" ? daysAgo(6) : r === "30d" ? daysAgo(29) : "0000";
 const EST = CATS.map(c => `e_${c}`).join(" + ");

@@ -4,7 +4,7 @@ import Donut from "../components/Donut.vue";
 import StackBar from "../components/StackBar.vue";
 import TrendChart from "../components/TrendChart.vue";
 import { get } from "../lib/api";
-import { CATS, CAT_CN, color, tk, pct, usd, dms } from "../lib/ctx";
+import { CATS, CAT_CN, color, tk, pct, usd, dms, shown } from "../lib/ctx";
 
 const props = defineProps<{ id: string; agents: { id: string; title: string }[]; initial?: string }>();
 const agent = ref(props.initial || "main");
@@ -35,7 +35,8 @@ watch(() => props.id, load);
 onMounted(load);
 
 const segsOf = (cats: Record<string, number>) => CATS.map(k => ({ key: k as string, label: CAT_CN[k], value: cats[k] ?? 0, color: color(k) }));
-const tokenSegs = computed(() => d.value ? [...CATS.map(k => ({ key: k as string, label: CAT_CN[k], value: d.value.tokens.cats[k], color: color(k), sub: `约 ${tk(d.value.tokens.cats[k])}` })),
+const hasBase = computed(() => !!d.value?.tokens.cats.base);
+const tokenSegs = computed(() => d.value ? [...shown(k => d.value.tokens.cats[k] > 0).map(k => ({ key: k as string, label: CAT_CN[k], value: d.value.tokens.cats[k], color: color(k), sub: `约 ${tk(d.value.tokens.cats[k])}` })),
   { key: "output", label: "输出", value: d.value.tokens.output, color: color("output"), sub: `${tk(d.value.tokens.output)} · 含思考` }] : []);
 const timeSegs = computed(() => d.value ? [
   { key: "model", label: "模型调用", value: d.value.timing.modelMs, color: color("system"), sub: `${dms(d.value.timing.modelMs)} · ${d.value.timing.modelCalls} 次` },
@@ -113,7 +114,7 @@ const groupItems = (g: any) => g.items.filter((i: any) => !catQ.value[g.cat] || 
         <h2 class="card-title">上下文浏览器<span class="more muted">第 {{ br.idx + 1 }} 次请求 · {{ br.at.slice(5, 16) }} · 合计 {{ tk(br.total) }}</span></h2>
         <StackBar :segs="br.groups.map((g: any) => ({ key: g.cat, label: CAT_CN[g.cat], value: g.tokens, color: color(g.cat) }))" :total="br.total || 1" :height="10" />
         <div class="groups">
-          <div v-for="g in br.groups" :key="g.cat" class="grp">
+          <div v-for="g in br.groups.filter((g: any) => g.cat !== 'base' || g.count)" :key="g.cat" class="grp">
             <div class="gh" @click="openCat[g.cat] = !openCat[g.cat]">
               <span class="arrow">{{ openCat[g.cat] ? "▾" : "▸" }}</span><i :style="{ background: color(g.cat) }"></i>
               <b>{{ CAT_CN[g.cat] }}</b><span class="muted">{{ g.count }} 项</span><span v-if="g.added" class="new">+{{ g.added }} 新</span>
@@ -143,7 +144,7 @@ const groupItems = (g: any) => g.items.filter((i: any) => !catQ.value[g.cat] || 
         </div>
       </h2>
       <TrendChart :data="d.trend" :marks="marks" :selected="sel" :mode="mode" :fit="fit" @select="i => (sel = i)" />
-      <div class="trendlg"><span v-for="k in CATS" :key="k"><i :style="{ background: color(k) }"></i>{{ CAT_CN[k] }}</span><span class="muted">✂ 压缩或清理 · 点柱子在上方浏览器里看这次请求</span></div>
+      <div class="trendlg"><span v-for="k in shown(() => hasBase)" :key="k"><i :style="{ background: color(k) }"></i>{{ CAT_CN[k] }}</span><span class="muted">✂ 压缩或清理 · 点柱子在上方浏览器里看这次请求</span></div>
     </div>
 
     <div class="row2 tall">

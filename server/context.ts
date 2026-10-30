@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, existsSync, statSync } from "fs";
 import { join, basename } from "path";
 import { CC_ROOT } from "./paths";
 import { localTs, promptText } from "./indexer";
-import { messageItems, shapeItems, scaleTo, costOf, windowOf, est, capMs, NO_TIME_TOOLS, CATS, type Cat, type Item } from "./classify";
+import { messageItems, shapeItems, snapshotShape, scaleTo, costOf, windowOf, est, capMs, NO_TIME_TOOLS, CATS, type Cat, type Item } from "./classify";
 
 type Usage = { input: number; read: number; w5: number; w1h: number; output: number };
 export type Req = {
@@ -49,6 +49,8 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
   let openReq: string | null = null;
   let lastModel: string | null = null;
   let mode: string | null = null;
+  // 没有 api-request 时从对话还原(见 indexer.ts 开头):tkeys = 上次压缩以来的消息,snapKey = 最近的提示词快照
+  let hasApi = false, tkeys: string[] = [], snapKey: string | null = null, lastUserAt: string | null = null, n = 0;
 
   for (const line of readFileSync(file, "utf8").split("\n")) {
     if (!line) continue;
@@ -58,22 +60,35 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
     const at = d.timestamp ? localTs(d.timestamp) : null;
     if (at) { if (!m.firstAt || at < m.firstAt) m.firstAt = at; if (!m.lastAt || at > m.lastAt) m.lastAt = at; }
 
-    if (t === "api-request-shape") { m.shapes.set(d.shapeHash, d.shape); continue; }
+    if (t === "api-request-shape") { hasApi = true; m.shapes.set(d.shapeHash, d.shape); continue; }
+    const inChain = !hasApi && (agentId !== "main" || !d.isSidechain);
+    n++;
+    if (t === "attachment") {
+      const a = d.attachment;
+      if (!inChain || !a) continue;
+      if (a.type === "prompt_snapshot") {
+        const sh = snapshotShape(a);
+        if (!sh.tools.length && snapKey) sh.tools = m.shapes.get(snapKey)?.tools ?? [];
+        snapKey = `snap:${n}`; m.shapes.set(snapKey, sh);
+      } else { const k = `att:${n}`; m.msgs.set(k, { role: "attachment", attachment: a }); tkeys.push(k); }
+      continue;
+    }
     if (t === "api-request-blob") { blobs.set(d.hash, d.message); continue; }
     if (t === "permission-mode") {
       if (mode && d.permissionMode !== mode) m.events.push({ at: m.lastAt ?? "", kind: "mode", text: `权限模式 ${mode} → ${d.permissionMode}` });
       mode = d.permissionMode; continue;
     }
     if (t === "api-request") {
+      hasApi = true;
       const src = d.querySource ?? "main";
       const keys = (chains.get(src) ?? []).slice(0, d.keep ?? 0);
-      let missing = 0;
+      // 没存档的条目:老格式回复和工具返回都没存档,新格式只有工具返回没存。这段 tail 里还没出现回复就补回复,出现了就补工具返回
+      let replyIn = false, toolsIn = false;
       const prev = lastReq.get(src);
       for (const h of d.tail ?? []) {
-        if (blobs.has(h)) { const k = `b:${h}`; if (!m.msgs.has(k)) m.msgs.set(k, blobs.get(h)); keys.push(k); continue; }
-        if (missing === 0 && prev) { keys.push(`r:${prev}`); m.msgs.set(`r:${prev}`, { role: "assistant", content: replyContent.get(prev) ?? [] }); }
-        else if (missing === 1 && prev) { keys.push(`t:${prev}`); m.msgs.set(`t:${prev}`, { role: "user", content: toolContent.get(prev) ?? [] }); }
-        missing++;
+        if (blobs.has(h)) { const k = `b:${h}`; if (!m.msgs.has(k)) m.msgs.set(k, blobs.get(h)); keys.push(k); if (blobs.get(h)?.role === "assistant") replyIn = true; continue; }
+        if (!replyIn) { replyIn = true; if (prev) { keys.push(`r:${prev}`); m.msgs.set(`r:${prev}`, { role: "assistant", content: replyContent.get(prev) ?? [] }); } }
+        else if (!toolsIn) { toolsIn = true; if (prev) { keys.push(`t:${prev}`); m.msgs.set(`t:${prev}`, { role: "user", content: toolContent.get(prev) ?? [] }); } }
       }
       chains.set(src, keys);
       const model = d.params?.model ?? null;
@@ -87,6 +102,7 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
     if (t === "system") {
       if (d.subtype === "turn_duration" && d.durationMs) m.activeMs += d.durationMs;
       if (d.subtype === "compact_boundary") {
+        if (inChain) tkeys = [];
         const c = d.compactMetadata ?? {};
         const txt = `${c.trigger === "auto" ? "自动" : "手动"}压缩：${Math.round((c.preTokens ?? 0) / 1000)}k → ${Math.round((c.postTokens ?? 0) / 1000)}k`;
         m.events.push({ at: at ?? "", kind: "compact", text: txt, tokens: -((c.preTokens ?? 0) - (c.postTokens ?? 0)), req: m.reqs.length });
@@ -98,10 +114,16 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
       const msg = d.message;
       const ref: string = d.requestRef ?? msg.id;
       let r = reqById.get(ref);
-      if (!r) { // 老版本没有请求记录:用回复本身造一条
-        r = { idx: m.reqs.length, id: ref, at: at ?? "", source: "legacy", model: msg.model ?? null, keys: [], shape: null,
+      if (!r) { // 没有请求记录:用回复本身造一条,上下文 = 到这条回复之前累计的对话
+        r = { idx: m.reqs.length, id: ref, at: (inChain ? lastUserAt : null) ?? at ?? "", source: inChain ? "transcript" : "legacy", model: msg.model ?? null,
+          keys: inChain ? [...tkeys] : [], shape: inChain ? snapKey : null,
           usage: { input: 0, read: 0, w5: 0, w1h: 0, output: 0 }, answered: false, lastAt: null, modelMs: 0, toolCalls: 0 };
         m.reqs.push(r); reqById.set(ref, r);
+      }
+      if (inChain && msg.id) {
+        const k = `a:${msg.id}`;
+        if (!m.msgs.has(k)) { m.msgs.set(k, { role: "assistant", content: [] }); tkeys.push(k); }
+        m.msgs.get(k).content.push(...(Array.isArray(msg.content) ? msg.content : []));
       }
       openReq = ref;
       (replyContent.get(ref) ?? replyContent.set(ref, []).get(ref)!).push(...(Array.isArray(msg.content) ? msg.content : []));
@@ -128,6 +150,7 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
       continue;
     }
     if (t === "user") {
+      if (inChain && d.message) { const k = `u:${n}`; m.msgs.set(k, d.message); tkeys.push(k); if (at) lastUserAt = at; }
       const content = d.message?.content;
       const results = Array.isArray(content) ? content.filter((c: any) => c?.type === "tool_result") : [];
       if (results.length) {
@@ -196,9 +219,27 @@ function shapeCats(shape: any) {
 export const inputOf = (u: Usage) => u.input + u.read + u.w5 + u.w1h;
 
 /** 一次请求各类的 token:先按字数估,有实际用量就等比缩放到实际输入总量 */
+/**
+ * 从对话还原、又没有提示词快照的请求:系统提示词和工具定义只能推算合计。
+ * 它们在一个会话里基本不变,取第一次请求的「实际输入 − 对话部分」,后面沿用(对话越长估算误差越大,不能每次拿余数)
+ */
+const baseCache = new WeakMap<AgentModel, number>();
+function baseOf(m: AgentModel, r: Req) {
+  if (r.source !== "transcript" || r.shape) return 0;
+  let b = baseCache.get(m);
+  if (b === undefined) {
+    const first = m.reqs.find(x => x.source === "transcript" && !x.shape && x.answered);
+    const msgs = first ? first.keys.reduce((s, k) => s + CATS.reduce((t, c) => t + msgCats(m, k)[c], 0), 0) : 0;
+    b = first ? Math.max(0, inputOf(first.usage) - msgs) : 0;
+    baseCache.set(m, b);
+  }
+  return b;
+}
+
 export function reqCats(m: AgentModel, r: Req) {
   const v = { ...shapeCats(r.shape ? m.shapes.get(r.shape) : null) };
   for (const k of r.keys) { const c = msgCats(m, k); for (const cat of CATS) v[cat] += c[cat]; }
+  v.base += baseOf(m, r);
   const estimate = CATS.reduce((s, c) => s + v[c], 0);
   const actual = inputOf(r.usage);
   const scaled = actual && estimate ? scaleTo(CATS.map(c => v[c]), actual) : CATS.map(c => v[c]);
@@ -213,6 +254,8 @@ export function requestBrowser(m: AgentModel, idx: number) {
   let pos = 0;
   for (const it of shapeItems(r.shape ? m.shapes.get(r.shape) : null)) items.push({ ...it, pos: pos++, key: "shape" });
   for (const k of r.keys) for (const it of messageItems(m.msgs.get(k), m.skillIds, m.toolNames)) items.push({ ...it, pos: pos++, key: k });
+  const base = baseOf(m, r);
+  if (base) items.unshift({ cat: "base", kind: "推算", tokens: base, text: "这份日志没有记录系统提示词和工具定义，只能推算两者的合计：取这个会话第一次请求的实际输入减去对话部分（一个会话里它们基本不变）。", pos: -1, key: "shape" });
   const estimate = items.reduce((s, i) => s + i.tokens, 0);
   const actual = inputOf(r.usage);
   const k = actual && estimate ? actual / estimate : 1;

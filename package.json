@@ -8,7 +8,8 @@
     "start": "bun server/index.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "build": "vue-tsc --noEmit -p web/tsconfig.json && vite build --config web/vite.config.ts",
-    "test": "bun test tests"
+    "test": "bun test tests",
+    "diagnose": "bun scripts/diagnose.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
