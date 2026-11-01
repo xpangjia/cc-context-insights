@@ -15,14 +15,20 @@ const d = ref<any>(null), loading = ref(false);
 const range = ref((route.query.range as string) || "today");
 const limit = ref(24);
 const q = ref(""), sort = ref<"recent" | "billed" | "ctx">("recent"), where = ref(""), heatBy = ref<"billed" | "sessions">("billed");
+const fam = ref((route.query.fam as string) || "all");
+const FAMS = [{ k: "all", t: "全部模型" }, { k: "claude", t: "Claude" }, { k: "deepseek", t: "DeepSeek" }, { k: "other", t: "其他" }];
+const FAM_CN: Record<string, string> = { claude: "Claude", deepseek: "DeepSeek", other: "其他" };
+const famN = (k: string) => d.value?.byModel?.fams.find((f: any) => f.fam === k)?.sessions ?? 0;
+const famTotal = computed(() => (d.value?.byModel?.fams ?? []).reduce((s: number, f: any) => s + f.billed, 0) || 1);
 const RANGES = [{ k: "today", t: "今天" }, { k: "7d", t: "近 7 天" }, { k: "30d", t: "近 30 天" }, { k: "all", t: "全部" }];
 
 async function load() {
   loading.value = true;
-  d.value = await get(`/api/insights?range=${range.value}&q=${encodeURIComponent(q.value)}`);
+  d.value = await get(`/api/insights?range=${range.value}&fam=${fam.value}&q=${encodeURIComponent(q.value)}`);
   loading.value = false;
 }
 watch(range, v => { router.replace({ query: { ...route.query, range: v } }); load(); });
+watch(fam, v => { router.replace({ query: { ...route.query, fam: v === "all" ? undefined : v } }); load(); });
 let t: number; watch(q, () => { clearTimeout(t); t = window.setTimeout(load, 300); });
 onMounted(load);
 
@@ -56,6 +62,7 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
   <div class="pagehead"><h1>上下文洞察</h1><span class="muted">所有 Claude Code 会话的用量、上下文组成和耗时</span><SessionSearch v-if="embedded" /></div>
   <div class="rangebar">
     <div class="seg"><button v-for="r in RANGES" :key="r.k" :class="{ on: range === r.k }" @click="range = r.k">{{ r.t }}</button></div>
+    <div class="seg"><button v-for="f in FAMS.filter(x => x.k === 'all' || x.k === fam || famN(x.k) > 0)" :key="f.k" :class="{ on: fam === f.k }" @click="fam = f.k">{{ f.t }}<span v-if="f.k !== 'all' && d" class="fn">{{ famN(f.k) }}</span></button></div>
     <span v-if="d" class="muted small">{{ d.from === "0000" ? "全部记录" : `${d.from} 起` }} · 费用按官方价估算，和你实际付的可能不同</span>
   </div>
   <template v-if="d">
@@ -63,7 +70,7 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
       <div class="kpis">
         <div class="card kpi"><div class="l">会话</div><div class="v">{{ d.kpi.sessions }}</div><div class="s">模型调用 {{ d.kpi.calls.toLocaleString() }} 次</div></div>
         <div class="card kpi"><div class="l">Token 消耗</div><div class="v">{{ tk(d.kpi.billed) }}</div><div class="s">其中输出 {{ tk(d.kpi.output) }}</div></div>
-        <div class="card kpi"><div class="l">估算费用</div><div class="v">{{ usd(d.kpi.cost) }}</div><div class="s">按 Anthropic 官方价</div></div>
+        <div class="card kpi"><div class="l">估算费用</div><div class="v">{{ usd(d.kpi.cost) }}</div><div class="s">Claude 按官方价，别家按 models.dev</div></div>
         <div class="card kpi"><div class="l">缓存命中</div><div class="v">{{ pct(d.kpi.cacheHit) }}</div><div class="s">输入里从缓存读的比例</div></div>
         <div class="card kpi"><div class="l">工具调用</div><div class="v">{{ d.kpi.tools.toLocaleString() }}</div><div class="s">执行 {{ dms(d.kpi.toolMs) }}</div></div>
         <div class="card kpi"><div class="l">活跃时长</div><div class="v">{{ dms(d.kpi.activeMs) }}</div><div class="s">主控和子 Agent 累计</div></div>
@@ -75,6 +82,21 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
       </div>
     </div>
 
+    <div class="card bym" v-if="d.byModel.models.length">
+      <h2 class="card-title">按模型<span class="more muted">点一行只看这一类</span></h2>
+      <div class="bt">
+        <template v-for="f in d.byModel.fams.filter((x: any) => x.sessions > 0)" :key="f.fam">
+          <button class="br fam" :class="{ on: fam === f.fam }" @click="fam = fam === f.fam ? 'all' : f.fam">
+            <span class="bn">{{ FAM_CN[f.fam] }}</span><span>{{ f.sessions }} 个会话</span><span>{{ tk(f.billed) }} token</span>
+            <span>{{ f.priced ? usd(f.cost) : `${usd(f.cost)}（有模型查不到价）` }}</span>
+            <span class="bar"><i :style="{ width: (f.billed / famTotal * 100).toFixed(1) + '%' }"></i></span><span class="muted">{{ pct(f.billed / famTotal) }}</span>
+          </button>
+          <div v-for="m in d.byModel.models.filter((x: any) => x.fam === f.fam)" :key="m.model" class="br sub">
+            <span class="bn mono">{{ m.model }}</span><span>{{ m.sessions }} 个会话</span><span>{{ tk(m.billed) }} token</span><span>{{ m.cost == null ? "查不到价" : usd(m.cost) }}</span><span></span><span></span>
+          </div>
+        </template>
+      </div>
+    </div>
     <div class="row2">
       <div class="card">
         <h2 class="card-title">Token 统计<span class="more muted">缓存命中 {{ pct(d.kpi.cacheHit) }}</span></h2>
@@ -117,7 +139,7 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
           <RouterLink v-for="c in cards.slice(0, limit)" :key="c.id" :to="`/session?id=${c.id}&tab=context`" class="card sc">
             <div class="sh"><div class="st"><PinIcon v-if="c.pinned" :on="true" :size="12" class="cp" />{{ (c.name ?? c.title ?? "（没有输入）").replace(/\s+/g, " ") }}</div>
               <button class="pinbtn" :class="{ on: c.pinned }" :title="c.pinned ? '取消固定' : '固定到最前面'" @click.prevent.stop="togglePin(c)"><PinIcon :on="c.pinned" :size="13" /></button><div class="sa muted">{{ ago(c.lastAt) }}<br>{{ c.lastAt.slice(0, 10) }}</div></div>
-            <div class="tags"><span class="tag">{{ c.where }}</span><span v-if="c.auto" class="tag">脚本自动</span><span v-if="c.subagents" class="tag">{{ c.subagents }} 个子 Agent</span></div>
+            <div class="tags"><span class="tag">{{ c.where }}</span><span v-for="m in (c.models ?? []).filter((x: string) => !/claude/.test(x)).slice(0, 2)" :key="m" class="tag mdl">{{ m }}</span><span v-if="c.auto" class="tag">脚本自动</span><span v-if="c.subagents" class="tag">{{ c.subagents }} 个子 Agent</span></div>
             <div class="sb">
               <Donut v-if="c.cats" :segs="miniSegs(c)" :center="tk(c.ctx)" :center-sub="pct(c.ctxPct)" :size="74" bare />
               <div v-else class="noctx muted">旧版记录<br>拆不开</div>
@@ -143,6 +165,19 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
 .seg { display: inline-flex; background: var(--side); border: 1px solid var(--line); border-radius: 9px; padding: 2px; }
 .seg button { border: 0; background: transparent; color: var(--ink2); padding: 5px 12px; border-radius: 7px; cursor: pointer; font-size: 13px; }
 .seg button.on { background: var(--card); color: var(--ink); font-weight: 600; box-shadow: var(--shadow); }
+.seg .fn { margin-left: 5px; font: 11px var(--num); color: var(--ink3); }
+.bym { margin-bottom: var(--gap); }
+.bt { display: flex; flex-direction: column; }
+.br { display: grid; grid-template-columns: minmax(140px, 1.4fr) 1fr 1fr 1.2fr 2fr 60px; gap: 10px; align-items: center; padding: 7px 10px; font-size: 13px; border: 0; background: none; text-align: left; color: var(--ink); font-family: inherit; border-radius: 8px; }
+.br.fam { cursor: pointer; border-top: 1px solid var(--line2); font-weight: 600; }
+.br.fam:first-child { border-top: 0; }
+.br.fam:hover { background: var(--hover, var(--side)); }
+.br.fam.on { background: var(--acc-soft, var(--side)); }
+.br.sub { font-size: 12px; color: var(--ink2); padding-top: 2px; padding-bottom: 2px; }
+.br.sub .bn { padding-left: 14px; }
+.br .bar { height: 6px; background: var(--line2); border-radius: 3px; overflow: hidden; }
+.br .bar i { display: block; height: 100%; background: var(--acc); }
+.tag.mdl { color: var(--acc); }
 .seg.sm button { padding: 3px 9px; font-size: 12px; }
 .right { margin-left: auto; font-weight: 400; }
 .top { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: var(--gap); margin-bottom: var(--gap); }
@@ -187,5 +222,6 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
 .moreline { display: flex; gap: 12px; align-items: center; justify-content: center; margin-top: 14px; }
 .last { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink2); border-top: 1px solid var(--line2); padding-top: 8px; }
 @media (max-width: 980px) { .top, .row2 { grid-template-columns: minmax(0, 1fr); } .row3 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) { .br { grid-template-columns: 1.4fr 1fr 1fr; } .br > :nth-child(n+4) { display: none; } }
 @media (max-width: 720px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi .v { font-size: 21px; } }
 </style>

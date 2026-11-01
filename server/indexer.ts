@@ -52,7 +52,7 @@ export function ensureSchema(db: Database) {
 }
 
 /** 索引格式版本:改了解析口径就加一,启动时发现旧版本会清空重建 */
-export const CC_VERSION = "9";
+export const CC_VERSION = "10";  // 10:模型名以回复里的为准(经网关换模型时,请求里写的还是 Claude 的名字)
 
 const SKIP_PREFIX = ['{"type":"mode"', '{"type":"permission-mode"', '{"type":"atis-latch"', '{"type":"file-history', '{"type":"queue-operation"'];
 
@@ -339,13 +339,14 @@ function save(db: Database, a: Acc, path: string, size: number, mtime: number, o
     for (const r of a.reqs) rq.run(r.id, a.sid, a.agent, localTs(r.at), localDay(r.at), r.source, r.model, ...r.e.map(x => Math.round(x)), r.msgs);
     const uq = db.query(`UPDATE cc_requests SET input = input + $i, cache_read = cache_read + $r, w5 = w5 + $w5, w1h = w1h + $w1h, output = output + $o,
       tool_ms = tool_ms + $tm, tool_calls = tool_calls + $tc, answered = MAX(answered, $an),
+      model = COALESCE($m, model),
       last_at = CASE WHEN $la IS NOT NULL AND (last_at IS NULL OR $la > last_at) THEN $la ELSE last_at END,
       model_ms = CASE WHEN $la IS NOT NULL THEN MAX(model_ms, MIN(${MAX_CALL_MS}, CAST((julianday($la) - julianday(at)) * 86400000 AS INTEGER))) ELSE model_ms END
       WHERE id = $id`);
     // 挂不上请求记录的用量(老会话没有 api-request)补一条只有用量的请求,保证全局总数对得上
     const lq = db.query(`INSERT OR IGNORE INTO cc_requests (id, session_id, agent, at, day, source, model) VALUES (?, ?, ?, ?, ?, 'legacy', ?)`);
     for (const [id, u] of a.upd) if (u.lastAt) lq.run(id, a.sid, a.agent, localTs(u.lastAt), localDay(u.lastAt), u.model);
-    for (const [id, u] of a.upd) uq.run({ $i: u.input, $r: u.read, $w5: u.w5, $w1h: u.w1h, $o: u.output, $tm: u.toolMs, $tc: u.toolCalls, $an: u.answered, $la: u.lastAt ? localTs(u.lastAt) : null, $id: id });
+    for (const [id, u] of a.upd) uq.run({ $i: u.input, $r: u.read, $w5: u.w5, $w1h: u.w1h, $o: u.output, $tm: u.toolMs, $tc: u.toolCalls, $an: u.answered, $la: u.lastAt ? localTs(u.lastAt) : null, $m: u.model, $id: id });
     db.query(`INSERT INTO cc_files (path, size, mtime, offset, session_id, state) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime, offset = excluded.offset, state = excluded.state`).run(path, size, mtime, offset, a.sid, JSON.stringify(a.state));
   })();

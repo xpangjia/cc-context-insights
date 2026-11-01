@@ -120,6 +120,8 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
           usage: { input: 0, read: 0, w5: 0, w1h: 0, output: 0 }, answered: false, lastAt: null, modelMs: 0, toolCalls: 0 };
         m.reqs.push(r); reqById.set(ref, r);
       }
+      // 实际回答的模型以回复为准:经网关换成别家模型时,请求里写的还是 Claude 的名字
+      if (msg.model && msg.model !== "<synthetic>") r.model = msg.model;
       if (inChain && msg.id) {
         const k = `a:${msg.id}`;
         if (!m.msgs.has(k)) { m.msgs.set(k, { role: "assistant", content: [] }); tkeys.push(k); }

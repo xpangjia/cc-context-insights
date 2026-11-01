@@ -5,7 +5,7 @@ import { existsSync } from "fs";
 import { join, normalize } from "path";
 import { ROOT, PORT, CC_ROOT } from "./paths";
 import { cached, invalidate } from "./cache";
-import { insights, sessionSummary, type Range, searchSessions } from "./insights";
+import { insights, sessionSummary, type Range, type Fam, searchSessions } from "./insights";
 import { labelsOf, setLabel } from "./labels";
 import { contextView, traceView, fleetView, requestBrowser, agentModelOf, titleOf } from "./context";
 import { startPrices } from "./prices";
@@ -25,7 +25,9 @@ const routes: Record<string, (url: URL, req: Request) => Response | Promise<Resp
     const r = url.searchParams.get("range") ?? "today";
     const range = (["today", "7d", "30d", "all"].includes(r) ? r : "today") as Range;
     const q = url.searchParams.get("q") ?? "";
-    return json({ ...(await cached(`ins:${range}:${q}`, 15000, async () => insights(range, q))), index: status });
+    const f = url.searchParams.get("fam") ?? "all";
+    const fam = (["all", "claude", "deepseek", "other"].includes(f) ? f : "all") as Fam;
+    return json({ ...(await cached(`ins:${range}:${fam}:${q}`, 15000, async () => insights(range, q, fam))), index: status });
   },
   // 名称和固定:GET 列出全部(给嵌入方用),POST 改一个
   "/api/labels": () => json(Object.fromEntries(labelsOf())),
