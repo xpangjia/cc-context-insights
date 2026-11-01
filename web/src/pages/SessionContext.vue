@@ -34,7 +34,12 @@ watch(sel, loadBrowser);
 watch(() => props.id, load);
 onMounted(load);
 
-const segsOf = (cats: Record<string, number>) => CATS.map(k => ({ key: k as string, label: CAT_CN[k], value: cats[k] ?? 0, color: color(k) }));
+const segsOf = (cats: Record<string, number>) => shown(k => (cats[k] ?? 0) > 0).map(k => ({ key: k as string, label: CAT_CN[k], value: cats[k] ?? 0, color: color(k) }));
+/** 用到的技能:按名字汇总成标签;明细里点一行展开看全文 */
+const skillCounts = computed(() => { const m = new Map<string, number>(); for (const u of d.value?.skillUses ?? []) if (u.via !== "压缩后重新带上") m.set(u.name, (m.get(u.name) ?? 0) + 1); return [...m].sort((a, b) => b[1] - a[1]); });
+const openSkill = ref<number | null>(null);
+const skillCard = ref<HTMLElement>();
+const toSkills = () => skillCard.value?.scrollIntoView({ behavior: "smooth", block: "start" });
 const hasBase = computed(() => !!d.value?.tokens.cats.base);
 const tokenSegs = computed(() => d.value ? [...shown(k => d.value.tokens.cats[k] > 0).map(k => ({ key: k as string, label: CAT_CN[k], value: d.value.tokens.cats[k], color: color(k), sub: `约 ${tk(d.value.tokens.cats[k])}` })),
   { key: "output", label: "输出", value: d.value.tokens.output, color: color("output"), sub: `${tk(d.value.tokens.output)} · 含思考` }] : []);
@@ -82,9 +87,29 @@ const groupItems = (g: any) => g.items.filter((i: any) => !catQ.value[g.cat] || 
           <span v-for="[n, c] in d.stats.tools.slice(0, 6)" :key="n" class="chip">{{ n }} {{ c }}</span><span v-if="d.stats.tools.length > 6" class="chip muted">其他 +{{ d.stats.tools.length - 6 }}</span></div>
         <div class="line"><span class="h">命令执行 {{ d.stats.bashTotal }}</span>
           <span v-for="[n, c] in d.stats.programs.slice(0, 6)" :key="n" class="chip mono">{{ n }} {{ c }}</span><span v-if="d.stats.programs.length > 6" class="chip muted">其他 +{{ d.stats.programs.length - 6 }}</span></div>
+        <div v-if="skillCounts.length" class="line"><span class="h">用到的技能 {{ d.stats.skills.length }}</span>
+          <button v-for="[n, c] in skillCounts" :key="n" class="chip skchip" @click="toSkills">{{ n }}<span v-if="c > 1" class="muted"> ×{{ c }}</span></button></div>
         <div v-if="d.stats.fleet.agents" class="line"><span class="h">编队</span>
           <span class="chip">主控 {{ tk(d.stats.fleet.mainBilled) }} / {{ usd(d.stats.fleet.mainCost) }}</span>
           <span class="chip">子 Agent × {{ d.stats.fleet.agents }} {{ tk(d.stats.fleet.subBilled) }} / {{ usd(d.stats.fleet.subCost) }}</span></div>
+      </div>
+    </div>
+
+    <div v-if="d.skillUses.length" ref="skillCard" class="card skills">
+      <h2 class="card-title">用到的技能<span class="tag">{{ d.skillUses.length }}</span><span v-if="agent === 'main' && agents.length > 1" class="more muted">主控和子 Agent 一起列</span></h2>
+      <div v-for="(u, i) in d.skillUses" :key="i" class="sk" :class="{ open: openSkill === i }">
+        <button class="skrow" @click="openSkill = openSkill === i ? null : i">
+          <span class="mono muted">{{ u.at.slice(5, 16) }}</span>
+          <span class="skname">{{ u.name }}</span>
+          <span class="tags"><span class="tag">{{ u.via }}</span><span v-if="u.who !== '主控' && u.who !== '这个 Agent'" class="tag">{{ u.who }}</span></span>
+          <span class="args muted">{{ u.args }}</span>
+          <span class="tok">{{ u.tokens ? `约 ${tk(u.tokens)}` : "—" }}</span>
+          <span class="muted arrow">{{ openSkill === i ? "收起" : "看全文" }}</span>
+        </button>
+        <template v-if="openSkill === i">
+          <div v-if="u.path" class="skpath mono muted">{{ u.path }}</div>
+          <pre class="log">{{ u.text || "（日志里没有这次加载的全文）" }}</pre>
+        </template>
       </div>
     </div>
 
@@ -219,6 +244,24 @@ const groupItems = (g: any) => g.items.filter((i: any) => !catQ.value[g.cat] || 
 .small { font-size: 12px; }
 .card { margin-bottom: var(--gap); }
 .note { font-size: 12px; margin-top: 10px; line-height: 1.6; }
+.skchip { cursor: pointer; font: inherit; }
+.skchip:hover { border-color: var(--acc); color: var(--acc); }
+.skills { margin-bottom: var(--gap); scroll-margin-top: 72px; }
+.sk { border-top: 1px solid var(--line2); }
+.sk:first-of-type { border-top: none; }
+.skrow { width: 100%; display: grid; grid-template-columns: 92px minmax(120px, auto) auto minmax(0, 1fr) 90px 64px; gap: 12px; align-items: center; text-align: left;
+  border: 0; background: none; color: var(--ink); padding: 9px 4px; cursor: pointer; font: 13px var(--font); }
+.skrow:hover { background: var(--hover); }
+.skrow .mono { font-size: 12px; }
+.skname { font-weight: 600; font-family: var(--mono); font-size: 13px; }
+.skrow .tags { display: flex; gap: 6px; }
+.skrow .args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.skrow .tok { text-align: right; font: 12.5px var(--num); }
+.skrow .arrow { text-align: right; font-size: 12px; white-space: nowrap; }
+.sk.open .arrow { color: var(--acc); }
+.skpath { font-size: 11.5px; margin: 0 4px 6px; word-break: break-all; }
+.sk pre.log { margin: 0 4px 10px; max-height: 360px; }
+@media (max-width: 900px) { .skrow { grid-template-columns: 1fr auto; } .skrow .args, .skrow .mono, .skrow .arrow { display: none; } }
 .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.6fr); gap: 10px; }
 .tile { background: var(--bg); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; }
 .tile b { font: 600 24px var(--num); color: var(--acc); }

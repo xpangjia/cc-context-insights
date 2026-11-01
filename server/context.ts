@@ -26,7 +26,11 @@ export type AgentModel = {
   agentLinks: Map<string, string>; // Agent 调用 tool_use id → 子 Agent 编号
   notifications: { at: string; agentId: string; status: string; summary: string; result: string }[];
   sends: { at: string; to: string; text: string }[];
+  skillUses: SkillUse[];
 };
+/** 一次技能使用。via:模型调用 = 模型用 Skill 工具加载;斜杠命令 = 你打的 /技能名;压缩后重新带上 = 压缩上下文后 Claude Code 自动再附上之前用过的技能 */
+export type SkillUse = { at: string; name: string; via: "模型调用" | "斜杠命令" | "压缩后重新带上"; args: string; tokens: number; text: string; path: string | null; req: number | null; toolId: string | null };
+const SKILL_BODY = /Base directory for this skill:\s*([^\n]+)/;
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s);
 const resultText = (c: any): string =>
@@ -36,7 +40,7 @@ const tag = (s: string, name: string) => s.match(new RegExp(`<${name}>([\\s\\S]*
 export function parseAgentFile(file: string, agentId: string): AgentModel {
   const m: AgentModel = {
     agentId, file, shapes: new Map(), msgs: new Map(), reqs: [], tools: [], prompts: [], trace: [], events: [], activeMs: 0,
-    firstAt: null, lastAt: null, lastReply: "", skillIds: new Set(), toolNames: new Map(), agentLinks: new Map(), notifications: [], sends: [],
+    firstAt: null, lastAt: null, lastReply: "", skillIds: new Set(), toolNames: new Map(), agentLinks: new Map(), notifications: [], sends: [], skillUses: [],
   };
   const blobs = new Map<string, any>();
   const chains = new Map<string, string[]>();
@@ -63,6 +67,12 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
     if (t === "api-request-shape") { hasApi = true; m.shapes.set(d.shapeHash, d.shape); continue; }
     const inChain = !hasApi && (agentId !== "main" || !d.isSidechain);
     n++;
+    // 压缩后自动重新附上的技能(不管有没有请求记录都要认)
+    if (t === "attachment" && d.attachment?.type === "invoked_skills") {
+      for (const k of d.attachment.skills ?? [])
+        m.skillUses.push({ at: at ?? "", name: String(k.name ?? ""), via: "压缩后重新带上", args: "", tokens: est(k.content ?? ""), text: clip(String(k.content ?? ""), 20000),
+          path: k.path ?? null, req: m.reqs.length ? m.reqs.length - 1 : null, toolId: null });
+    }
     if (t === "attachment") {
       const a = d.attachment;
       if (!inChain || !a) continue;
@@ -143,7 +153,10 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
         else if (c.type === "tool_use") {
           r.toolCalls++;
           m.toolNames.set(c.id, c.name);
-          if (c.name === "Skill") m.skillIds.add(c.id);
+          if (c.name === "Skill") {
+            m.skillIds.add(c.id);
+            m.skillUses.push({ at: at ?? "", name: String(c.input?.skill ?? ""), via: "模型调用", args: String(c.input?.args ?? ""), tokens: 0, text: "", path: null, req: r.idx, toolId: c.id });
+          }
           if (c.name === "SendMessage") m.sends.push({ at: at ?? "", to: String(c.input?.to ?? c.input?.recipient ?? ""), text: String(c.input?.message ?? c.input?.content ?? "") });
           const tool: Tool = { id: c.id, name: c.name, input: c.input, at: at ?? "", endAt: null, ms: null, ok: null, result: "", req: r.idx };
           m.tools.push(tool); toolById.set(c.id, tool);
@@ -163,6 +176,8 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
           tool.endAt = at; tool.ok = !rr.is_error;
           tool.ms = at && tool.at ? Math.max(0, Date.parse(at.replace(" ", "T")) - Date.parse(tool.at.replace(" ", "T"))) : null;
           tool.result = clip(resultText(rr.content), 4000);
+          // 老版本技能全文直接放在 Skill 工具的返回里
+          if (tool.name === "Skill") { const u = m.skillUses.find(x => x.toolId === tool.id); if (u && !u.tokens) { const full = resultText(rr.content); u.tokens = est(full); u.text = clip(full, 20000); } }
           const aid = d.toolUseResult?.agentId;
           if (tool.name === "Agent" || tool.name === "Task") { if (aid) m.agentLinks.set(tool.id, aid); }
           const shown = (tool.name === "Agent" || tool.name === "Task") && /async_launched|Async agent launched/i.test(tool.result + JSON.stringify(d.toolUseResult ?? "")) ? "已在后台启动，完成后会发通知" : clip(tool.result, 300);
@@ -175,6 +190,22 @@ export function parseAgentFile(file: string, agentId: string): AgentModel {
         const n = { at: at ?? "", agentId: tag(raw, "task-id"), status: tag(raw, "status"), summary: tag(raw, "summary"), result: clip(tag(raw, "result"), 6000) };
         m.notifications.push(n);
         m.trace.push({ at: at ?? "", kind: "agent", text: n.summary || `后台任务 ${n.status}`, detail: clip(n.result, 300) });
+        continue;
+      }
+      // 技能正文:模型调 Skill 后(带 sourceToolUseID)或你打 /技能名 后,Claude Code 把技能全文作为一条消息塞进来
+      const body = raw.match(SKILL_BODY);
+      if (body) {
+        const path = body[1].trim();
+        const use = d.sourceToolUseID ? m.skillUses.find(u => u.toolId === d.sourceToolUseID) : undefined;
+        if (use) { use.tokens = est(raw); use.text = clip(raw, 20000); use.path = path; }
+        else {
+          // 紧挨着的上一句是 1 分钟内打的斜杠命令,就用命令名;否则用技能目录名
+          const last = m.prompts[m.prompts.length - 1];
+          const cmd = last?.text.startsWith("/") && at && Date.parse(at.replace(" ", "T")) - Date.parse(last.at.replace(" ", "T")) < 60000 ? last : null;
+          const name = cmd ? cmd.text.slice(1).split(/\s/)[0] : basename(path);
+          m.skillUses.push({ at: at ?? "", name, via: "斜杠命令", args: cmd?.text.split(/\s+/).slice(1).join(" ") ?? "", tokens: est(raw), text: clip(raw, 20000), path,
+            req: m.reqs.length ? m.reqs.length - 1 : null, toolId: null });
+        }
         continue;
       }
       if (d.isMeta) continue;
@@ -396,11 +427,16 @@ export function contextView(sid: string, agent = "main") {
     if (a > 20000 && b < a * 0.85 && !compactReqs.has(i) && !compactReqs.has(i - 1))
       prunes.push({ at: series[i].at, kind: "prune", text: `上下文清理：${Math.round(a / 1000)}k → ${Math.round(b / 1000)}k（自动清掉了较早的工具结果）`, tokens: b - a, req: i });
   }
+  // 用到的技能:看主控时把子 Agent 的也算上,标明是谁用的
+  const subTitle = (am: AgentModel) => { const meta = s.subs.find(x => x.model === am)?.meta; return meta?.description ?? am.agentId; };
+  const skillList = [m, ...s.subs.map(x => x.model)].flatMap(am => am.skillUses.map(u => ({ ...u, who: am === m ? (agent === "main" ? "主控" : "这个 Agent") : subTitle(am), agent: am.agentId })))
+    .sort((a, b) => a.at.localeCompare(b.at));
   return {
     sid, title: titleOf(m), model: lastModel, window: windowOf(lastModel),
+    skillUses: skillList.map(u => ({ ...u, text: u.text })),
     stats: {
       turns: m.prompts.length, steps: reqs.length, replies: answered.length,
-      skills: m.tools.filter(t => t.name === "Skill").map(t => String(t.input?.skill ?? "")),
+      skills: skillList.filter(u => u.via !== "压缩后重新带上").map(u => u.name),
       events: { inject: injects.length, compact: m.events.filter(e => e.kind === "compact").length, prune: prunes.length },
       io: { user: m.prompts.length, read: m.tools.filter(t => t.name === "Read").length, write: m.tools.filter(t => ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(t.name)).length,
         search: m.tools.filter(t => ["Glob", "Grep"].includes(t.name)).length, images },
