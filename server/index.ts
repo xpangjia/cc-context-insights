@@ -8,6 +8,7 @@ import { cached, invalidate } from "./cache";
 import { insights, sessionSummary, type Range, searchSessions } from "./insights";
 import { labelsOf, setLabel } from "./labels";
 import { contextView, traceView, fleetView, requestBrowser, agentModelOf, titleOf } from "./context";
+import { startPrices } from "./prices";
 
 const DIST = join(ROOT, "web/dist");
 const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { "content-type": "application/json; charset=utf-8" } });
@@ -58,6 +59,7 @@ const routes: Record<string, (url: URL, req: Request) => Response | Promise<Resp
   "/api/session/fleet": url => { const d = fleetView(url.searchParams.get("id") ?? ""); return d ? json(d) : json({ error: "找不到这个会话" }, 404); },
 };
 
+startPrices();
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: PORT,

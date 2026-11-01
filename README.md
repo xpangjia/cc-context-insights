@@ -53,6 +53,7 @@ cd cc-context-insights
   3. **连提示词快照也没有**：系统提示词和工具定义拆不开，显示成一项「系统与工具（合计）」，取会话第一次请求的「实际输入 − 对话部分」推算。这一项偏高，只能当参考。
 - 各类的 token 先按字数估（中文 1 字约 1 个，其他约 3.6 个字符 1 个），再按日志里官方计量的实际输入**等比换算**，所以各类加起来等于实际值。
 - 费用按 Anthropic 官方价估算（如 Opus 5.5 输入 $4 / 输出 $20 每百万 token，缓存读 $0.2，缓存写入按输入价 1.25 倍 / 1 小时缓存 2 倍）。你实际走订阅或代理的话，真实花费不同。
+- 经网关跑在 Claude Code 里的别家模型（DeepSeek、GLM、Kimi 等），价格查公开价目表 [models.dev](https://models.dev)：启动时读本机存的那份，后台每天刷新一次，存在 `~/.cc-context-insights/models-dev.json`。同一个模型多家在卖时优先原厂报价。查不到的模型不算费用。
 - 计时：单次调用最多按 30 分钟算（更长多半是电脑休眠或在等确认）；派子 Agent 的那次调用不计工具时长，子 Agent 自己的时间另算。
 
 ## 设置（都可以不管）
@@ -100,6 +101,7 @@ bun test             # 单元测试
 | `server/indexer.ts` | 后台增量索引：每个日志文件记住读到哪，下次只读新的部分 |
 | `server/context.ts` | 单个会话的深度解析：还原每次请求、轨迹、文件、命令、编队、通讯 |
 | `server/classify.ts` | 七类分类、token 估算、价格 |
+| `server/prices.ts` | 公开价目表（models.dev）的拉取、缓存和挑选 |
 | `server/insights.ts` | 首页统计 |
 | `web/src/pages/` | 页面；`web/src/components/` 图表 |
 

@@ -191,10 +191,20 @@ const PRICES: [RegExp, Price][] = [
   [/haiku-5/, { in: 0.1, out: 0.5, read: 0.01 }],
   [/haiku/, { in: 1, out: 5, read: 0.1 }],
 ];
+/**
+ * 别家模型(DeepSeek、GLM、Kimi……经网关跑在 Claude Code 里)的价格查公开价目表 models.dev。
+ * 价目表由 prices.ts 每天刷新一次,存在本机;这里只读内存里的那份,查不到返回空(页面显示「—」)。
+ */
+let openTable: Map<string, Price> = new Map();
+export const setOpenPrices = (m: Map<string, Price>) => { openTable = m; };
 export const priceOf = (model: string | null | undefined): Price | null => {
   if (!model) return null;
-  return PRICES.find(([re]) => re.test(model))?.[1] ?? null;
+  const own = PRICES.find(([re]) => re.test(model))?.[1];
+  if (own) return own;
+  const id = model.replace(/\[.*\]$/, "").toLowerCase();
+  return openTable.get(id) ?? openTable.get(id.split("/").pop()!) ?? null;
 };
+export type { Price };
 /** 缓存写入:5 分钟按输入价 1.25 倍,1 小时按 2 倍 */
 export function costOf(model: string | null | undefined, u: { input: number; read: number; w5: number; w1h: number; output: number }) {
   const p = priceOf(model);
