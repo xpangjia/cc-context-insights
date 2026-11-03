@@ -97,7 +97,7 @@ export function insights(range: Range, q = "", fam: Fam = "all") {
   const cards = ss.map(s => {
     const last = db.query(`SELECT *, ${ACT} actual, (${EST}) est FROM cc_requests WHERE session_id = ? AND agent IS NULL AND answered = 1 ORDER BY at DESC LIMIT 1`).get(s.id) as any;
     return {
-      id: s.id, title: s.title, name: labels.get(s.id)?.name ?? null, pinned: !!labels.get(s.id)?.pinnedAt, lastPrompt: s.last_prompt, lastAt: s.last_at, auto: !!s.auto, turns: s.prompts, steps: s.steps, billed: s.billed,
+      id: s.id, title: s.title, name: labels.get(s.id)?.name ?? null, pinned: !!labels.get(s.id)?.pinnedAt, lastPrompt: s.last_prompt, lastAt: s.last_at, auto: !!s.auto, dsh: s.engine === "dsh", turns: s.prompts, steps: s.steps, billed: s.billed,
       cost: costBy(`session_id = ? AND day >= ? AND ${F}`, [s.id, from]), models: modelsOf(s.id), where: whereOf(s.cwd, s.dir), subagents: s.subagents,
       ctx: last?.actual ?? 0, ctxPct: last ? last.actual / 1_000_000 : 0,
       cats: last && last.est > 0 ? Object.fromEntries(CATS.map(c => [c, Math.round(last[`e_${c}`] * last.actual / last.est)])) : null,
@@ -121,7 +121,7 @@ export function sessionSummary(id: string) {
   const s = db.query("SELECT * FROM cc_sessions WHERE id = ?").get(id) as any;
   if (!s) return null;
   const l = labelsOf([id]).get(id);
-  return { ...s, where: whereOf(s.cwd, s.dir), resume: `claude --resume ${id}`, name: l?.name ?? null, pinned: !!l?.pinnedAt };
+  return { ...s, where: whereOf(s.cwd, s.dir), resume: s.engine === "dsh" ? null : `claude --resume ${id}`, name: l?.name ?? null, pinned: !!l?.pinnedAt };
 }
 
 /**

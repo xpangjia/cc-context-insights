@@ -59,7 +59,7 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
 </script>
 
 <template>
-  <div class="pagehead"><h1>上下文洞察</h1><span class="muted">所有 Claude Code 会话的用量、上下文组成和耗时</span><SessionSearch v-if="embedded" /></div>
+  <div class="pagehead"><h1>上下文洞察</h1><span class="muted">所有 Claude Code 和 DeepSeek Harness 会话的用量、上下文组成和耗时</span><SessionSearch v-if="embedded" /></div>
   <div class="rangebar">
     <div class="seg"><button v-for="r in RANGES" :key="r.k" :class="{ on: range === r.k }" @click="range = r.k">{{ r.t }}</button></div>
     <div class="seg"><button v-for="f in FAMS.filter(x => x.k === 'all' || x.k === fam || famN(x.k) > 0)" :key="f.k" :class="{ on: fam === f.k }" @click="fam = f.k">{{ f.t }}<span v-if="f.k !== 'all' && d" class="fn">{{ famN(f.k) }}</span></button></div>
@@ -139,7 +139,7 @@ const miniSegs = (c: any): Seg[] => c.cats ? [...CATS.map(k => ({ key: k as stri
           <RouterLink v-for="c in cards.slice(0, limit)" :key="c.id" :to="`/session?id=${c.id}&tab=context`" class="card sc">
             <div class="sh"><div class="st"><PinIcon v-if="c.pinned" :on="true" :size="12" class="cp" />{{ (c.name ?? c.title ?? "（没有输入）").replace(/\s+/g, " ") }}</div>
               <button class="pinbtn" :class="{ on: c.pinned }" :title="c.pinned ? '取消固定' : '固定到最前面'" @click.prevent.stop="togglePin(c)"><PinIcon :on="c.pinned" :size="13" /></button><div class="sa muted">{{ ago(c.lastAt) }}<br>{{ c.lastAt.slice(0, 10) }}</div></div>
-            <div class="tags"><span class="tag">{{ c.where }}</span><span v-for="m in (c.models ?? []).filter((x: string) => !/claude/.test(x)).slice(0, 2)" :key="m" class="tag mdl">{{ m }}</span><span v-if="c.auto" class="tag">脚本自动</span><span v-if="c.subagents" class="tag">{{ c.subagents }} 个子 Agent</span></div>
+            <div class="tags"><span class="tag">{{ c.where }}</span><span v-if="c.dsh" class="tag mdl">DeepSeek Harness</span><span v-for="m in (c.models ?? []).filter((x: string) => !/claude/.test(x)).slice(0, 2)" :key="m" class="tag mdl">{{ m }}</span><span v-if="c.auto" class="tag">脚本自动</span><span v-if="c.subagents" class="tag">{{ c.subagents }} 个子 Agent</span></div>
             <div class="sb">
               <Donut v-if="c.cats" :segs="miniSegs(c)" :center="tk(c.ctx)" :center-sub="pct(c.ctxPct)" :size="74" bare />
               <div v-else class="noctx muted">旧版记录<br>拆不开</div>

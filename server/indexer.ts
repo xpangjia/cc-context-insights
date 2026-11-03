@@ -47,6 +47,8 @@ export function ensureSchema(db: Database) {
   try { db.exec("ALTER TABLE cc_files ADD COLUMN state TEXT"); } catch {}
   try { db.exec("ALTER TABLE cc_sessions ADD COLUMN auto INTEGER DEFAULT 0"); } catch {}
   try { db.exec("ALTER TABLE cc_requests ADD COLUMN e_base INTEGER DEFAULT 0"); } catch {}
+  // 哪个工具的会话:空 = Claude Code,dsh = DeepSeek Harness(翻译过来的)
+  try { db.exec("ALTER TABLE cc_sessions ADD COLUMN engine TEXT"); } catch {}
   // 手动设的名称和固定:不在重建清空的表里
   db.exec("CREATE TABLE IF NOT EXISTS cc_labels (session_id TEXT PRIMARY KEY, name TEXT, pinned_at TEXT)");
 }
@@ -103,7 +105,7 @@ type ReqUpd = { model: string | null; input: number; read: number; w5: number; w
 
 type Acc = {
   state: State; agent: string | null; reqs: ReqRow[]; upd: Map<string, ReqUpd>;
-  sid: string; dir: string; cwd?: string; entry?: string; first?: string; last?: string; title?: string; lastPrompt?: string; branch?: string;
+  sid: string; dir: string; cwd?: string; entry?: string; first?: string; last?: string; title?: string; customTitle?: string; lastPrompt?: string; branch?: string;
   prompts: number; replies: number; out: number; inp: number; cr: number; cw: number; model?: string; sub: boolean;
   skills: [string, string, string][]; said: [string, string][];
 };
@@ -151,6 +153,8 @@ function parseLines(text: string, acc: Acc) {
     }
 
     if (t === "last-prompt" && typeof d.lastPrompt === "string") { acc.lastPrompt = d.lastPrompt.slice(0, 300); continue; }
+    // 会话改名(Claude Code 的 /rename、dsh 自己起的标题都记成这一行):后来的覆盖前面的
+    if (t === "custom-title" && d.customTitle) { acc.customTitle = String(d.customTitle).slice(0, 120); continue; }
     const ts: string | undefined = d.timestamp;
     if (ts) { if (!acc.first || ts < acc.first) acc.first = ts; if (!acc.last || ts > acc.last) acc.last = ts; }
     if (d.cwd && !acc.cwd) acc.cwd = d.cwd;
@@ -272,7 +276,7 @@ function listFiles(root: string) {
   return out;
 }
 
-export function indexAll(db: Database, root: string, log = (_: string) => {}) {
+export function indexAll(db: Database, root: string | string[], log = (_: string) => {}) {
   ensureSchema(db);
   const ver = (db.query("SELECT value FROM cc_meta WHERE key = 'version'").get() as { value: string } | null)?.value;
   if (ver !== CC_VERSION) {
@@ -282,7 +286,7 @@ export function indexAll(db: Database, root: string, log = (_: string) => {}) {
   }
   const getFile = db.query("SELECT size, mtime, offset, state FROM cc_files WHERE path = ?");
   let changed = 0, bytes = 0;
-  for (const f of listFiles(root)) {
+  for (const f of (Array.isArray(root) ? root : [root]).flatMap(listFiles)) {
     const st = statSync(f.path);
     const prev = getFile.get(f.path) as { size: number; mtime: number; offset: number; state: string | null } | null;
     if (prev && prev.size === st.size && prev.mtime === st.mtimeMs) continue;
@@ -302,7 +306,7 @@ export function indexAll(db: Database, root: string, log = (_: string) => {}) {
   return { changed, bytes };
 }
 
-function purgeSession(db: Database, sid: string) {
+export function purgeSession(db: Database, sid: string) {
   for (const t of ["cc_skills", "cc_prompts", "cc_requests"]) db.query(`DELETE FROM ${t} WHERE session_id = ?`).run(sid);
   db.query("DELETE FROM cc_sessions WHERE id = ?").run(sid);
   db.query("DELETE FROM cc_files WHERE session_id = ?").run(sid);
@@ -310,25 +314,28 @@ function purgeSession(db: Database, sid: string) {
 
 function save(db: Database, a: Acc, path: string, size: number, mtime: number, offset: number) {
   db.transaction(() => {
-    db.query(`INSERT INTO cc_sessions (id, dir, cwd, first_at, last_at, title, last_prompt, prompts, replies, out_tokens, in_tokens, cache_read, cache_write, model, subagents, branch, auto)
-      VALUES ($id, $dir, $cwd, $first, $last, $title, $lp, $prompts, $replies, $out, $inp, $cr, $cw, $model, $sub, $branch, COALESCE($auto, 0))
+    db.query(`INSERT INTO cc_sessions (id, dir, cwd, first_at, last_at, title, last_prompt, prompts, replies, out_tokens, in_tokens, cache_read, cache_write, model, subagents, branch, auto, engine)
+      VALUES ($id, $dir, $cwd, $first, $last, $title, $lp, $prompts, $replies, $out, $inp, $cr, $cw, $model, $sub, $branch, COALESCE($auto, 0), $engine)
       ON CONFLICT(id) DO UPDATE SET
         cwd = COALESCE(cc_sessions.cwd, excluded.cwd),
         first_at = CASE WHEN cc_sessions.first_at IS NULL OR (excluded.first_at IS NOT NULL AND excluded.first_at < cc_sessions.first_at) THEN excluded.first_at ELSE cc_sessions.first_at END,
         last_at = CASE WHEN cc_sessions.last_at IS NULL OR (excluded.last_at IS NOT NULL AND excluded.last_at > cc_sessions.last_at) THEN excluded.last_at ELSE cc_sessions.last_at END,
-        title = COALESCE(cc_sessions.title, excluded.title),
+        title = CASE WHEN $ct IS NOT NULL THEN $ct ELSE COALESCE(cc_sessions.title, excluded.title) END,
         last_prompt = COALESCE(excluded.last_prompt, cc_sessions.last_prompt),
         prompts = cc_sessions.prompts + excluded.prompts, replies = cc_sessions.replies + excluded.replies,
         out_tokens = cc_sessions.out_tokens + excluded.out_tokens, in_tokens = cc_sessions.in_tokens + excluded.in_tokens,
         cache_read = cc_sessions.cache_read + excluded.cache_read, cache_write = cc_sessions.cache_write + excluded.cache_write,
         model = COALESCE(excluded.model, cc_sessions.model), subagents = cc_sessions.subagents + excluded.subagents,
         branch = COALESCE(excluded.branch, cc_sessions.branch),
-        auto = CASE WHEN $sub = 1 OR $auto IS NULL THEN cc_sessions.auto ELSE $auto END`).run({
+        auto = CASE WHEN $sub = 1 OR $auto IS NULL THEN cc_sessions.auto ELSE $auto END,
+        engine = COALESCE(cc_sessions.engine, excluded.engine)`).run({
       $id: a.sid, $dir: a.dir, $cwd: a.sub ? null : a.cwd ?? null, $first: a.first ? localTs(a.first) : null, $last: a.last ? localTs(a.last) : null,
-      $title: a.title ?? null, $lp: a.lastPrompt ?? null, $prompts: a.prompts, $replies: a.replies, $out: a.out, $inp: a.inp, $cr: a.cr, $cw: a.cw,
+      $title: a.customTitle ?? a.title ?? null, $ct: a.customTitle ?? null, $lp: a.lastPrompt ?? null, $prompts: a.prompts, $replies: a.replies, $out: a.out, $inp: a.inp, $cr: a.cr, $cw: a.cw,
       $model: a.model ?? null, $sub: a.sub && !(db.query("SELECT 1 FROM cc_files WHERE path = ?").get(path)) ? 1 : 0, $branch: a.branch ?? null,
       // 脚本用 claude -p 起的会话入口是 sdk-cli,自己在终端开的是 cli
-      $auto: a.sub || !a.entry ? null : a.entry === "sdk-cli" ? 1 : 0,
+      // dsh 翻译过来的:工作台、编排器派的活入口记成 dsh-auto
+      $auto: a.sub || !a.entry ? null : a.entry === "sdk-cli" || a.entry === "dsh-auto" ? 1 : 0,
+      $engine: a.entry?.startsWith("dsh") ? "dsh" : null,
     });
     const sq = db.query("INSERT INTO cc_skills (session_id, at, skill, via) VALUES (?, ?, ?, ?)");
     for (const [at, s, via] of a.skills) sq.run(a.sid, localTs(at), s, via);

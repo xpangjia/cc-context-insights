@@ -54,7 +54,7 @@ onMounted(load);
   <div v-if="err" class="card empty">{{ err }}，<RouterLink to="/" class="lk">回到总览</RouterLink></div>
   <template v-else-if="s">
     <div v-if="!bare" class="card head">
-      <div class="crumbs"><button class="back" @click="goBack" title="返回上一页">← 返回</button><RouterLink to="/">上下文洞察</RouterLink><span>/</span><span>{{ s.where }}</span><span v-if="s.auto" class="tag">脚本自动</span><SessionSearch v-if="embedded" class="crs" /></div>
+      <div class="crumbs"><button class="back" @click="goBack" title="返回上一页">← 返回</button><RouterLink to="/">上下文洞察</RouterLink><span>/</span><span>{{ s.where }}</span><span v-if="s.engine === 'dsh'" class="tag">DeepSeek Harness</span><span v-if="s.auto" class="tag">脚本自动</span><SessionSearch v-if="embedded" class="crs" /></div>
       <div class="titlerow">
         <input v-if="editing" ref="nameInp" v-model="draft" class="nameinp" maxlength="120" placeholder="给这个会话起个名字，清空就恢复原标题"
           @keydown.enter="saveName" @keydown.esc="editing = false" @blur="saveName" />
@@ -73,7 +73,7 @@ onMounted(load);
         <span>模型<b>{{ s.model ?? "—" }}</b></span><span v-if="s.branch">分支<b>{{ s.branch }}</b></span>
         <span v-if="s.cwd">目录<b class="mono">{{ s.cwd }}</b></span>
       </div>
-      <div class="resume"><code>{{ s.resume }}</code><button class="btn sm" @click="copy">{{ copied ? "已复制" : "复制" }}</button><span class="muted">在终端里接着这个会话</span></div>
+      <div v-if="s.resume" class="resume"><code>{{ s.resume }}</code><button class="btn sm" @click="copy">{{ copied ? "已复制" : "复制" }}</button><span class="muted">在终端里接着这个会话</span></div>
     </div>
     <div class="tabs">
       <button v-for="t in TABS" :key="t.k" :class="{ on: tab === t.k }" @click="setTab(t.k)">{{ t.t }}<span v-if="t.k === 'fleet' && agents.length > 1" class="n">{{ agents.length - 1 }}</span></button>

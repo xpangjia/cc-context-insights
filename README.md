@@ -47,6 +47,16 @@ cd cc-context-insights
 - **轨迹**：按时间看每一步：输入、回复、思考、工具调用和结果、子 Agent 完成通知；顶部时间带看输入 / 模型 / 工具在什么时候活动。
 - **编队**：Agent 网络、成员、任务、通讯记录（派活和回报一一对应）。
 
+## DeepSeek Harness 的会话
+
+装了 DeepSeek Harness（npm 包 `@deepseek-ai/dsh`，命令行 `dsh`）的话，它的会话也一起统计：默认读 `~/.dsh/sessions`，用 `DSH_SESSIONS_DIRS` 可以指定别的目录（冒号分隔写多个）。
+
+- dsh 的会话日志是压缩过的事件流，本工具每 2 分钟把有变化的会话翻译成 Claude Code 日志的格式，放在 `~/.cc-context-insights/dsh-mirror/`，跟 Claude Code 的会话走同一套统计。原日志只读不改。
+- 会话卡片和会话页标着「DeepSeek Harness」；工作台、编排器派的活算「脚本自动」。标题用 dsh 自己起的标题。
+- dsh 派的子 Agent 挂在父会话下面，用量算进父会话，编队页能看到。
+- 费用按 models.dev 的 DeepSeek 价目估。dsh 的用量本身就分好了「新输入 / 缓存命中 / 输出」，直接对应过来。
+- 没有「接着这个会话」的命令行（dsh 没有对应的续会话命令）。
+
 ## 数字是怎么来的
 
 - 每次请求的上下文按下面三种情况还原，按七类拆开：
@@ -64,6 +74,7 @@ cd cc-context-insights
 |---|---|---|
 | `PORT` | 18450 | 网页端口 |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Claude Code 会话日志目录 |
+| `DSH_SESSIONS_DIRS` | `~/.dsh/sessions` | DeepSeek Harness 会话目录，冒号分隔可写多个；目录不存在就跳过 |
 | `CC_INSIGHTS_DATA` | `~/.cc-context-insights` | 本工具的索引库，删掉会自动重建 |
 | `NO_OPEN` | 不设 | 设成 1 就不自动开浏览器 |
 

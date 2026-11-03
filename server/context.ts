@@ -4,7 +4,7 @@
  */
 import { readFileSync, readdirSync, existsSync, statSync } from "fs";
 import { join, basename } from "path";
-import { CC_ROOT } from "./paths";
+import { LOG_ROOTS } from "./paths";
 import { localTs, promptText } from "./indexer";
 import { messageItems, shapeItems, snapshotShape, scaleTo, costOf, windowOf, est, capMs, NO_TIME_TOOLS, CATS, type Cat, type Item } from "./classify";
 
@@ -310,10 +310,12 @@ export function requestBrowser(m: AgentModel, idx: number) {
 // ---------- 会话整体 ----------
 
 function findMainFile(sid: string) {
-  if (!existsSync(CC_ROOT)) return null;
-  for (const dir of readdirSync(CC_ROOT)) {
-    const f = join(CC_ROOT, dir, `${sid}.jsonl`);
-    if (existsSync(f)) return f;
+  for (const root of LOG_ROOTS) {
+    if (!existsSync(root)) continue;
+    for (const dir of readdirSync(root)) {
+      const f = join(root, dir, `${sid}.jsonl`);
+      if (existsSync(f)) return f;
+    }
   }
   return null;
 }
@@ -338,6 +340,11 @@ export function loadSession(sid: string): Session | null {
       return { model: parseAgentFile(f, id), meta };
     }),
   };
+  // 子 Agent 的元数据里记着派它的那次调用(dsh 翻译过来的会话靠这个关联;Claude Code 的会话一般在工具返回里已经关联上)
+  for (const sub of s.subs) {
+    const tid = sub.meta?.toolUseId;
+    if (tid && !s.main.agentLinks.has(tid)) s.main.agentLinks.set(tid, sub.model.agentId);
+  }
   cache.set(sid, { sig, s });
   if (cache.size > 12) cache.delete(cache.keys().next().value!);
   return s;
